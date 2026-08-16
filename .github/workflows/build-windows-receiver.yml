@@ -70,7 +70,16 @@ jobs:
           cd Sources/BetterCastReceiverDesktop
           mkdir build
           cd build
-          cmake .. -G "Visual Studio 17 2022" -A x64 `
+          # Ninja, not the Visual Studio generator. "Setup MSVC" above already puts the
+          # x64 toolchain on PATH, so the compiler is found through the environment
+          # rather than by looking up one specific Visual Studio version. Hardcoding
+          # "Visual Studio 17 2022" is what broke this job: the runner image moved on,
+          # CMake reported "could not find any instance of Visual Studio", and every
+          # Windows build from v14 to v16 failed at configure. Nothing surfaced it
+          # because the macOS release path does not depend on this workflow.
+          # Ninja is single-config, so the build type is set here instead of at build
+          # time and the binary lands in build/ rather than build/Release/.
+          cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
             -DENABLE_SENDER=ON
@@ -79,7 +88,7 @@ jobs:
         shell: pwsh
         run: |
           cd Sources/BetterCastReceiverDesktop/build
-          cmake --build . --config Release
+          cmake --build .
 
       - name: Download ADB platform-tools
         shell: pwsh
@@ -141,7 +150,7 @@ jobs:
           mkdir artifact
 
           # Copy the exe
-          Copy-Item "Sources/BetterCastReceiverDesktop/build/Release/BetterCastReceiver.exe" "artifact/"
+          Copy-Item "Sources/BetterCastReceiverDesktop/build/BetterCastReceiver.exe" "artifact/"
 
           # Run windeployqt to bundle Qt DLLs
           windeployqt --release --no-translations --no-system-d3d-compiler `
