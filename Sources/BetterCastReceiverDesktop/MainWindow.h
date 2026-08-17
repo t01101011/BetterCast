@@ -88,6 +88,7 @@ private slots:
     void onReceiverSelected(int index);
     void onCreateVirtualDisplay();
     void onRemoveVirtualDisplay();
+    void onExtendDisplays();
     void onRefreshMonitors();
     void onMonitorSelected(int index);
 #endif
@@ -171,6 +172,7 @@ private:
     QComboBox* m_vddResolutionCombo = nullptr;
     QPushButton* m_createVddBtn = nullptr;
     QPushButton* m_removeVddBtn = nullptr;
+    QPushButton* m_extendBtn = nullptr;
     QPushButton* m_recheckVddBtn = nullptr;
     QLabel* m_vddStatusLabel = nullptr;
 #endif

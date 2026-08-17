@@ -19,7 +19,11 @@ public:
     ~VideoEncoderFF() override;
 
     bool init(int width, int height, int fps = 30, int bitrateMbps = 8);
-    void encode(const QByteArray& nv12Data, int width, int height);
+
+    // ptsNanos: real capture time. Passing a frame counter instead makes the
+    // wire timestamps lie whenever capture jitters or drops, and a receiver
+    // pacing playback off PTS then accumulates delay.
+    void encode(const QByteArray& nv12Data, int width, int height, qint64 ptsNanos);
     void requestKeyframe();
     void shutdown();
 
@@ -40,6 +44,7 @@ private:
     AVPacket* m_pkt = nullptr;
     int64_t m_frameCount = 0;
     int m_fps = 30;
+    qint64 m_firstPtsNanos = -1;   // wall-clock origin, so PTS starts near zero
     bool m_forceKeyframe = false;
     QString m_encoderName;
 

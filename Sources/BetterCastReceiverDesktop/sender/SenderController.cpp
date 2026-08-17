@@ -42,6 +42,16 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
 
     // Create screen capture (targeting selected monitor)
 #ifdef _WIN32
+    // A mirrored virtual display shares the primary's framebuffer, so capturing
+    // it would just stream a copy of the primary. Fix the topology first.
+    if (m_vdd) {
+        auto topo = m_vdd->queryTopology();
+        if (topo.valid && topo.anyCloned) {
+            emit statusChanged("Display is mirrored — switching to extend...");
+            m_vdd->ensureExtendedTopology();
+        }
+    }
+
     auto* cap = new ScreenCaptureWin(fps, this);
     cap->setMonitorIndex(m_adapterIndex, m_outputIndex);
     cap->setDisplayName(m_displayName);
@@ -55,14 +65,21 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     m_encoder = new VideoEncoderFF(this);
     m_network = new NetworkSender(this);
 
-    // Wire signals
+    // Wire signals.
+    //
+    // Capture → encode is a DIRECT connection so both run on the capture thread.
+    // With the default (queued) connection the encode would hop back to the GUI
+    // thread and serialise behind Qt painting, which is where the old pipeline
+    // lost most of its latency.
     connect(m_capture, &ScreenCapture::frameCaptured,
-            this, &SenderController::onFrameCaptured);
+            this, &SenderController::onFrameCaptured, Qt::DirectConnection);
     connect(m_capture, &ScreenCapture::error,
             this, &SenderController::error);
 
+    // Encode → network is QUEUED: QTcpSocket is thread-affine and lives on the
+    // GUI thread. Only the compressed payload crosses, so the copy is cheap.
     connect(m_encoder, &VideoEncoderFF::encoded,
-            this, &SenderController::onEncoded);
+            this, &SenderController::onEncoded, Qt::QueuedConnection);
     connect(m_encoder, &VideoEncoderFF::error,
             this, &SenderController::error);
 
@@ -129,14 +146,19 @@ void SenderController::onDisconnected() {
     }
 }
 
-void SenderController::onFrameCaptured(const QByteArray& nv12, int width, int height) {
+void SenderController::onFrameCaptured(const QByteArray& nv12, int width, int height,
+                                       qint64 ptsNanos) {
     if (!m_encoder || !m_sending) return;
 
     // Lazy-init encoder on first frame (captures real resolution)
     if (!m_encoderReady) {
         if (!m_encoder->init(width, height, m_fps, m_bitrateMbps)) {
             emit error("Failed to initialize H.264 encoder");
-            stopSending();
+            // Do NOT call stopSending() directly — we are on the capture thread
+            // and stopSending() joins that same thread, which would deadlock.
+            // Queue the teardown onto this object's own (GUI) thread instead.
+            QMetaObject::invokeMethod(this, [this]() { stopSending(); },
+                                      Qt::QueuedConnection);
             return;
         }
         m_encoderReady = true;
@@ -146,7 +168,7 @@ void SenderController::onFrameCaptured(const QByteArray& nv12, int width, int he
         m_encoder->requestKeyframe();
     }
 
-    m_encoder->encode(nv12, width, height);
+    m_encoder->encode(nv12, width, height, ptsNanos);
 }
 
 void SenderController::onEncoded(const QByteArray& payload) {

@@ -565,6 +565,7 @@ void MainWindow::setupSendPage() {
             m_recheckVddBtn->setVisible(false);
             m_vddResolutionCombo->setEnabled(true);
             m_createVddBtn->setEnabled(true);
+            if (m_extendBtn) m_extendBtn->setEnabled(true);
         } else {
             m_vddStatusLabel->setText(
                 "Still not detected — make sure VDD is installed and try restarting the app");
@@ -616,6 +617,18 @@ void MainWindow::setupSendPage() {
         "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
     connect(m_removeVddBtn, &QPushButton::clicked, this, &MainWindow::onRemoveVirtualDisplay);
     vddBtnRow->addWidget(m_removeVddBtn);
+
+    m_extendBtn = new QPushButton("Extend Displays");
+    m_extendBtn->setToolTip("Switch Windows out of mirrored mode and place the "
+                            "virtual display beside your primary monitor");
+    m_extendBtn->setEnabled(vddInstalled);
+    m_extendBtn->setStyleSheet(
+        "QPushButton { background-color: #333; color: #ccc; padding: 8px 18px; "
+        "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
+        "QPushButton:hover { background-color: #444; }"
+        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+    connect(m_extendBtn, &QPushButton::clicked, this, &MainWindow::onExtendDisplays);
+    vddBtnRow->addWidget(m_extendBtn);
 
     vddBtnRow->addStretch();
     vddLayout->addLayout(vddBtnRow);
@@ -1310,6 +1323,36 @@ void MainWindow::onRemoveVirtualDisplay() {
             } else {
                 m_removeVddBtn->setEnabled(true);
                 LogManager::instance().log("Failed to remove virtual display");
+            }
+            onRefreshMonitors();
+        });
+    }).detach();
+}
+
+void MainWindow::onExtendDisplays() {
+    if (!m_sender || !m_sender->vdd()) return;
+
+    m_extendBtn->setEnabled(false);
+    m_vddStatusLabel->setText("Checking display topology...");
+    m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #4da6ff;");
+
+    // SetDisplayConfig blocks while the mode change settles — keep it off the UI thread.
+    std::thread([this]() {
+        auto* vdd = m_sender->vdd();
+        const bool wasCloned = vdd->queryTopology().anyCloned;
+        const bool ok = vdd->ensureExtendedTopology();
+
+        QMetaObject::invokeMethod(this, [this, ok, wasCloned]() {
+            m_extendBtn->setEnabled(true);
+            if (ok && wasCloned) {
+                m_vddStatusLabel->setText("Displays extended");
+                m_vddStatusLabel->setStyleSheet("font-size: 13px; color: #4caf50;");
+            } else if (ok) {
+                m_vddStatusLabel->setText("Already extended");
+                m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
+            } else {
+                m_vddStatusLabel->setText("Could not extend — see logs");
+                m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #d32f2f;");
             }
             onRefreshMonitors();
         });

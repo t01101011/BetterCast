@@ -1,6 +1,7 @@
 #include "VideoEncoderFF.h"
 #include <QDebug>
 #include <QElapsedTimer>
+#include <algorithm>
 #include <cstring>
 
 extern "C" {
@@ -31,12 +32,18 @@ bool VideoEncoderFF::tryEncoder(const char* codecName, int width, int height, in
 
     ctx->width = width;
     ctx->height = height;
-    ctx->time_base = {1, fps};
+    // Microsecond timebase so real capture timestamps survive intact rather
+    // than being quantised onto an assumed frame grid.
+    ctx->time_base = {1, 1000000};
     ctx->framerate = {fps, 1};
     ctx->pix_fmt = AV_PIX_FMT_NV12;
     ctx->bit_rate = bitrate;
     ctx->rc_max_rate = bitrate * 3 / 2;              // allow 1.5x peak for motion
-    ctx->rc_buffer_size = bitrate;                     // 1-second VBV buffer
+    // VBV buffer bounds how long the encoder may hold frames back on a bitrate
+    // spike — a 1-second buffer permits a full second of lag when you drag a
+    // window. Two frames is the latency cap; macOS uses a 0.1s DataRateLimits
+    // window for the same reason.
+    ctx->rc_buffer_size = static_cast<int>(std::max<int64_t>(bitrate * 2 / fps, 64000));
     ctx->gop_size = fps * 5;                           // keyframe every 5 seconds
     ctx->max_b_frames = 0;                             // no B-frames for low latency
     ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
@@ -151,6 +158,7 @@ bool VideoEncoderFF::init(int width, int height, int fps, int bitrateMbps) {
 
     m_pkt = av_packet_alloc();
     m_frameCount = 0;
+    m_firstPtsNanos = -1;
     m_forceKeyframe = false;
     return true;
 }
@@ -211,13 +219,15 @@ QByteArray VideoEncoderFF::annexBtoAVCC(const uint8_t* data, int size) {
     return result;
 }
 
-void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height) {
+void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, qint64 ptsNanos) {
     if (!m_ctx || !m_frame || !m_pkt) return;
     if (width != m_ctx->width || height != m_ctx->height) {
         qWarning() << "Sender: Frame size mismatch, reinitializing encoder";
         init(width, height, m_fps);
         if (!m_ctx) return;
     }
+
+    if (m_firstPtsNanos < 0) m_firstPtsNanos = ptsNanos;
 
     av_frame_make_writable(m_frame);
 
@@ -235,7 +245,9 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height) {
         memcpy(m_frame->data[1] + y * m_frame->linesize[1], uvSrc + y * width, width);
     }
 
-    m_frame->pts = m_frameCount++;
+    // Microseconds since the first frame, matching ctx->time_base.
+    m_frame->pts = (ptsNanos - m_firstPtsNanos) / 1000;
+    m_frameCount++;
 
     if (m_forceKeyframe) {
         m_frame->pict_type = AV_PICTURE_TYPE_I;
@@ -260,8 +272,8 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height) {
         if (ret < 0) break;
 
         // Build BetterCast video payload: [8B PTS nanoseconds][AVCC NALUs]
-        // PTS in nanoseconds: frame_pts * (1e9 / fps)
-        uint64_t ptsNanos = static_cast<uint64_t>(m_pkt->pts) * (1000000000ULL / m_fps);
+        // ctx->time_base is microseconds, so scale up to the wire's nanoseconds.
+        uint64_t ptsNanos = static_cast<uint64_t>(m_pkt->pts < 0 ? 0 : m_pkt->pts) * 1000ULL;
 
         QByteArray payload;
         payload.reserve(8 + m_pkt->size + 64);

@@ -188,7 +188,9 @@ endif()
 if(ENABLE_SENDER)
     target_compile_definitions(BetterCastReceiver PRIVATE ENABLE_SENDER=1)
     if(WIN32)
-        target_link_libraries(BetterCastReceiver PRIVATE d3d11 dxgi setupapi)
+        # user32: CCD display-topology APIs (QueryDisplayConfig / SetDisplayConfig)
+        # winmm:  timeBeginPeriod, for capture-thread timing granularity
+        target_link_libraries(BetterCastReceiver PRIVATE d3d11 dxgi setupapi user32 winmm)
     endif()
 endif()
 

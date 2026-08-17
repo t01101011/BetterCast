@@ -31,6 +31,20 @@ public:
         int refreshRate;
     };
 
+    // Snapshot of the desktop's display topology.
+    //
+    // In CCD terms a "clone" (what Display Settings calls "Duplicate these
+    // displays") is two active paths that share one source — one framebuffer
+    // driving several monitors. Extend gives every target its own source.
+    struct TopologyState {
+        bool valid = false;         // the CCD query succeeded
+        bool anyCloned = false;     // some source drives more than one target
+        bool virtualCloned = false; // a virtual display is one of the clones
+        bool virtualActive = false; // a virtual target is attached to the desktop
+        int activePaths = 0;
+        QString describe() const;
+    };
+
     // VDD detection
     bool isVddInstalled() const;
     QString vddInstallPath() const;
@@ -48,6 +62,14 @@ public:
     // Find the output index for a virtual display
     int findVirtualDisplayOutput() const;
 
+    // Display topology
+    TopologyState queryTopology() const;
+
+    // Force the desktop out of mirrored mode and place the virtual display
+    // beside the primary. No-op (but still repositions) when already extended.
+    // This is what Display Settings → "Extend these displays" does.
+    bool ensureExtendedTopology();
+
 signals:
     void virtualDisplayCreated(int outputIndex);
     void virtualDisplayRemoved();
@@ -60,6 +82,9 @@ private:
     bool installDriver();
     bool ensureVddControlRunning();
     bool activateVirtualDisplay();
+    bool applyExtendTopology();          // SDC_TOPOLOGY_EXTEND — the Win+P route
+    bool applyExtendTopologySupplied();  // explicit one-source-per-target path set
+    bool positionVirtualDisplay();       // place it to the right of the primary
     bool writeVddSettings(const QVector<VddResolution>& displays);
     QVector<VddResolution> readVddSettings() const;
     bool notifyDriverRefresh();

@@ -42,7 +42,10 @@ signals:
     void statusChanged(const QString& status);
 
 private slots:
-    void onFrameCaptured(const QByteArray& nv12, int width, int height);
+    // Runs on the capture thread (direct connection) — encoding happens there,
+    // not on the GUI thread. Touch only encoder state from here.
+    void onFrameCaptured(const QByteArray& nv12, int width, int height, qint64 ptsNanos);
+    // Runs on the GUI thread (queued) — m_network's socket is thread-affine.
     void onEncoded(const QByteArray& payload);
     void onConnected();
     void onDisconnected();

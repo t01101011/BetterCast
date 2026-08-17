@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QProcess>
+#include <QSet>
 #include <QThread>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
@@ -30,6 +31,82 @@
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "setupapi.lib")
+#pragma comment(lib, "user32.lib")   // CCD: QueryDisplayConfig / SetDisplayConfig
+
+#ifndef DISPLAYCONFIG_PATH_MODE_IDX_INVALID
+#define DISPLAYCONFIG_PATH_MODE_IDX_INVALID 0xffffffff
+#endif
+#endif
+
+// ─── CCD (Connecting and Configuring Displays) helpers ────────────────────────
+#ifdef _WIN32
+namespace {
+
+// Keywords shared with the DXGI/GDI enumeration paths below.
+bool looksVirtual(const QString& text) {
+    static const QStringList kKeys = {"virtual", "indirect", "idd", "vdd", "mtt"};
+    QString lower = text.toLower();
+    for (const auto& k : kKeys) {
+        if (lower.contains(k)) return true;
+    }
+    return false;
+}
+
+bool isVirtualTarget(const DISPLAYCONFIG_PATH_INFO& path) {
+    DISPLAYCONFIG_TARGET_DEVICE_NAME name = {};
+    name.header.type = DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME;
+    name.header.size = sizeof(name);
+    name.header.adapterId = path.targetInfo.adapterId;
+    name.header.id = path.targetInfo.id;
+    if (DisplayConfigGetDeviceInfo(&name.header) != ERROR_SUCCESS) return false;
+
+    if (looksVirtual(QString::fromWCharArray(name.monitorFriendlyDeviceName)) ||
+        looksVirtual(QString::fromWCharArray(name.monitorDevicePath))) {
+        return true;
+    }
+    // IddCx targets have no real connector, so they report OTHER.
+    return name.outputTechnology == DISPLAYCONFIG_OUTPUT_TECHNOLOGY_OTHER;
+}
+
+// GetDisplayConfigBufferSizes → QueryDisplayConfig, retrying the race where a
+// display is hotplugged between the two calls.
+bool queryPaths(QVector<DISPLAYCONFIG_PATH_INFO>& paths,
+                QVector<DISPLAYCONFIG_MODE_INFO>& modes,
+                UINT32 flags) {
+    for (int attempt = 0; attempt < 5; attempt++) {
+        UINT32 pathCount = 0, modeCount = 0;
+        if (GetDisplayConfigBufferSizes(flags, &pathCount, &modeCount) != ERROR_SUCCESS) {
+            return false;
+        }
+        if (pathCount == 0 || modeCount == 0) return false;  // no displays to reason about
+        paths.resize(static_cast<int>(pathCount));
+        modes.resize(static_cast<int>(modeCount));
+
+        LONG r = QueryDisplayConfig(flags, &pathCount, paths.data(),
+                                    &modeCount, modes.data(), nullptr);
+        if (r == ERROR_SUCCESS) {
+            paths.resize(static_cast<int>(pathCount));
+            modes.resize(static_cast<int>(modeCount));
+            return true;
+        }
+        if (r != ERROR_INSUFFICIENT_BUFFER) return false;  // only the race is retryable
+    }
+    return false;
+}
+
+QString sourceKey(const DISPLAYCONFIG_PATH_INFO& p) {
+    return QString("%1:%2:%3").arg(p.sourceInfo.adapterId.HighPart)
+                              .arg(p.sourceInfo.adapterId.LowPart)
+                              .arg(p.sourceInfo.id);
+}
+
+QString targetKey(const DISPLAYCONFIG_PATH_INFO& p) {
+    return QString("%1:%2:%3").arg(p.targetInfo.adapterId.HighPart)
+                              .arg(p.targetInfo.adapterId.LowPart)
+                              .arg(p.targetInfo.id);
+}
+
+} // namespace
 #endif
 
 // Known VDD installation paths (static fallbacks)
@@ -472,6 +549,249 @@ bool VirtualDisplayVDD::activateVirtualDisplay() {
     return false;
 }
 
+// ─── Display Topology (extend vs. mirror) ──────────────────────────────────────
+
+QString VirtualDisplayVDD::TopologyState::describe() const {
+    if (!valid) return QStringLiteral("unknown (query failed)");
+
+    QString s = QString::number(activePaths) + " active path(s), ";
+    s += anyCloned ? "MIRRORED" : "extended";
+    if (!virtualActive)      s += ", no virtual display attached";
+    else if (virtualCloned)  s += ", virtual display is mirrored";
+    else                     s += ", virtual display has its own source";
+    return s;
+}
+
+VirtualDisplayVDD::TopologyState VirtualDisplayVDD::queryTopology() const {
+    TopologyState st;
+#ifdef _WIN32
+    QVector<DISPLAYCONFIG_PATH_INFO> paths;
+    QVector<DISPLAYCONFIG_MODE_INFO> modes;
+    if (!queryPaths(paths, modes, QDC_ONLY_ACTIVE_PATHS)) return st;
+
+    const int n = static_cast<int>(paths.size());
+    st.valid = true;
+    st.activePaths = n;
+
+    for (int i = 0; i < n; i++) {
+        const bool virt = isVirtualTarget(paths[i]);
+        if (virt) st.virtualActive = true;
+
+        for (int j = 0; j < n; j++) {
+            if (i == j) continue;
+            if (sourceKey(paths[i]) != sourceKey(paths[j])) continue;
+            // Same source, different target — that is the definition of clone.
+            st.anyCloned = true;
+            if (virt) st.virtualCloned = true;
+        }
+    }
+#endif
+    return st;
+}
+
+bool VirtualDisplayVDD::applyExtendTopology() {
+#ifdef _WIN32
+    // Exactly what Win+P → Extend does: restore the saved extend topology.
+    LONG r = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_TOPOLOGY_EXTEND | SDC_APPLY);
+    if (r == ERROR_SUCCESS) {
+        VDD_LOG("VDD: Applied SDC_TOPOLOGY_EXTEND");
+        return true;
+    }
+    VDD_LOG(QString("VDD: SDC_TOPOLOGY_EXTEND failed (code %1)").arg(r));
+#endif
+    return false;
+}
+
+bool VirtualDisplayVDD::applyExtendTopologySupplied() {
+#ifdef _WIN32
+    // SDC_TOPOLOGY_EXTEND only restores a topology Windows has already saved.
+    // When there is none (common the first time a VDD monitor appears) we build
+    // the path set ourselves: keep exactly the targets that are active now, but
+    // give each one a source no other target uses.
+    QVector<DISPLAYCONFIG_PATH_INFO> all;
+    QVector<DISPLAYCONFIG_MODE_INFO> allModes;
+    if (!queryPaths(all, allModes, QDC_ALL_PATHS)) {
+        VDD_LOG("VDD: QueryDisplayConfig(QDC_ALL_PATHS) failed");
+        return false;
+    }
+
+    // The targets we must keep lit — never activate anything new.
+    QSet<QString> wantedTargets;
+    for (const auto& p : all) {
+        if (p.flags & DISPLAYCONFIG_PATH_ACTIVE) wantedTargets.insert(targetKey(p));
+    }
+    if (wantedTargets.isEmpty()) return false;
+
+    QVector<DISPLAYCONFIG_PATH_INFO> chosen;
+    QSet<QString> usedSources;
+    QSet<QString> placedTargets;
+
+    auto take = [&](const DISPLAYCONFIG_PATH_INFO& p) {
+        DISPLAYCONFIG_PATH_INFO path = p;
+        path.flags |= DISPLAYCONFIG_PATH_ACTIVE;
+        // Dictate topology only — let Windows pick resolutions and refresh rates.
+        path.sourceInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        path.targetInfo.modeInfoIdx = DISPLAYCONFIG_PATH_MODE_IDX_INVALID;
+        chosen.append(path);
+        usedSources.insert(sourceKey(p));
+        placedTargets.insert(targetKey(p));
+    };
+
+    // Pass 1 — every active target keeps its current source if nothing else claimed it.
+    for (const auto& p : all) {
+        if (!(p.flags & DISPLAYCONFIG_PATH_ACTIVE)) continue;
+        if (placedTargets.contains(targetKey(p))) continue;
+        if (usedSources.contains(sourceKey(p))) continue;  // loser of a clone pair
+        take(p);
+    }
+
+    // Pass 2 — targets that lost the source race get re-homed onto a free one.
+    for (const auto& p : all) {
+        if (!wantedTargets.contains(targetKey(p))) continue;
+        if (placedTargets.contains(targetKey(p))) continue;
+        if (usedSources.contains(sourceKey(p))) continue;
+        take(p);
+    }
+
+    if (placedTargets.size() != wantedTargets.size()) {
+        VDD_LOG(QString("VDD: Could only give %1 of %2 displays a unique source")
+                    .arg(placedTargets.size()).arg(wantedTargets.size()));
+        return false;
+    }
+
+    const UINT32 base = SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_ALLOW_CHANGES;
+    const UINT32 count = static_cast<UINT32>(chosen.size());
+    LONG r = SetDisplayConfig(count, chosen.data(), 0, nullptr, base | SDC_SAVE_TO_DATABASE);
+    if (r != ERROR_SUCCESS) {
+        VDD_LOG(QString("VDD: SetDisplayConfig failed (code %1), retrying without save").arg(r));
+        r = SetDisplayConfig(count, chosen.data(), 0, nullptr, base);
+    }
+    if (r == ERROR_SUCCESS) {
+        VDD_LOG(QString("VDD: Applied explicit extend topology across %1 display(s)")
+                    .arg(chosen.size()));
+        return true;
+    }
+    VDD_LOG(QString("VDD: Explicit extend topology failed (code %1)").arg(r));
+#endif
+    return false;
+}
+
+bool VirtualDisplayVDD::positionVirtualDisplay() {
+#ifdef _WIN32
+    // Find the primary so we can park the virtual display just past its right edge.
+    DEVMODEW primaryDm = {};
+    primaryDm.dmSize = sizeof(primaryDm);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &primaryDm)) {
+        VDD_LOG("VDD: Could not read primary display settings");
+        return false;
+    }
+
+    // The desktop may already extend past the primary (real second monitor);
+    // park the virtual display beyond everything so nothing overlaps.
+    LONG rightEdge = static_cast<LONG>(primaryDm.dmPelsWidth);
+    DISPLAY_DEVICEW scan = {};
+    scan.cb = sizeof(scan);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &scan, 0); i++) {
+        if (scan.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
+            DEVMODEW dm = {};
+            dm.dmSize = sizeof(dm);
+            if (EnumDisplaySettingsW(scan.DeviceName, ENUM_CURRENT_SETTINGS, &dm) &&
+                !looksVirtual(QString::fromWCharArray(scan.DeviceString))) {
+                rightEdge = qMax(rightEdge, dm.dmPosition.x + static_cast<LONG>(dm.dmPelsWidth));
+            }
+        }
+        scan = {};
+        scan.cb = sizeof(scan);
+    }
+
+    bool moved = false;
+    DISPLAY_DEVICEW dd = {};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
+        const QString devName = QString::fromWCharArray(dd.DeviceName);
+        const bool isVirtual = looksVirtual(QString::fromWCharArray(dd.DeviceString));
+
+        if (isVirtual && (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+            DEVMODEW dm = {};
+            dm.dmSize = sizeof(dm);
+            if (!EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+                dd = {}; dd.cb = sizeof(dd);
+                continue;
+            }
+
+            if (dm.dmPosition.x == rightEdge && dm.dmPosition.y == 0) {
+                VDD_LOG("VDD: " + devName + " already positioned beside the primary");
+                dd = {}; dd.cb = sizeof(dd);
+                continue;
+            }
+
+            dm.dmFields = DM_POSITION;
+            dm.dmPosition.x = rightEdge;
+            dm.dmPosition.y = 0;
+
+            LONG ret = ChangeDisplaySettingsExW(dd.DeviceName, &dm, nullptr,
+                                                CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+            if (ret == DISP_CHANGE_SUCCESSFUL) {
+                moved = true;
+                rightEdge += static_cast<LONG>(dm.dmPelsWidth);  // stack extra VDDs sideways
+                VDD_LOG(QString("VDD: Positioned %1 at %2,0").arg(devName).arg(dm.dmPosition.x));
+            } else {
+                VDD_LOG(QString("VDD: Could not position %1 (code %2)").arg(devName).arg(ret));
+            }
+        }
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+
+    if (moved) ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);  // commit
+    return moved;
+#else
+    return false;
+#endif
+}
+
+bool VirtualDisplayVDD::ensureExtendedTopology() {
+#ifdef _WIN32
+    TopologyState before = queryTopology();
+    if (!before.valid) {
+        VDD_LOG("VDD: Topology query failed — cannot verify extend mode");
+        return false;
+    }
+    VDD_LOG("VDD: Topology before: " + before.describe());
+
+    if (!before.anyCloned) {
+        positionVirtualDisplay();
+        return true;
+    }
+
+    VDD_LOG("VDD: Desktop is mirrored — switching to extend...");
+
+    // SDC_TOPOLOGY_EXTEND can report success while leaving the desktop cloned
+    // (it restores a *saved* topology, which may itself be stale), so verify
+    // after each attempt rather than trusting the return code.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        const bool applied = (attempt == 0) ? applyExtendTopology()
+                                            : applyExtendTopologySupplied();
+        if (!applied) continue;
+
+        QThread::msleep(500);  // let the mode change settle before re-reading
+        TopologyState after = queryTopology();
+        VDD_LOG("VDD: Topology after: " + after.describe());
+        if (after.valid && !after.anyCloned) {
+            positionVirtualDisplay();
+            emit statusChanged("Display extended");
+            return true;
+        }
+    }
+
+    emit error("Could not switch the desktop out of mirrored mode. "
+               "Set Display Settings → 'Extend these displays' manually.");
+    return false;
+#else
+    return false;
+#endif
+}
+
 bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshRate) {
     if (!m_vddInstalled) {
         emit error("VDD is not installed. Download from github.com/itsmikethetech/Virtual-Display-Driver");
@@ -514,6 +834,9 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
             QThread::msleep(1000);
             outputIdx = findVirtualDisplayOutput();
         }
+        // Windows re-applies the last projection mode to newly attached monitors,
+        // so a fresh VDD often comes up mirrored. Force extend before capture.
+        ensureExtendedTopology();
         emit virtualDisplayCreated(outputIdx);
         return true;
     }
@@ -549,6 +872,7 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
     if (outputIdx < 0) {
         VDD_LOG("VDD: Virtual display still not found — it may need manual 'Extend' in Display Settings");
     }
+    ensureExtendedTopology();
     emit virtualDisplayCreated(outputIdx);
     return true;
 }
@@ -702,7 +1026,14 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
 
         if (!alreadyFound && isVirtual) {
             MonitorInfo info;
-            info.adapterIndex = static_cast<int>(i);
+            // These indices are NOT DXGI indices — this branch only runs for
+            // displays DXGI could not enumerate (typically a VDD that is not
+            // attached to the desktop yet). Publishing the EnumDisplayDevices
+            // ordinal as an adapter index sent the capture path to the wrong
+            // adapter, which is what forced the slow GDI fallback. The device
+            // name below is the authoritative key; ScreenCaptureWin resolves
+            // the real adapter/output from it.
+            info.adapterIndex = 0;
             info.outputIndex = 0;
             info.name = devName;
             info.adapterName = devString;
