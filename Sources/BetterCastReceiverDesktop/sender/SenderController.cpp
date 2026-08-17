@@ -99,13 +99,13 @@ QString SenderController::claimDisplayFor(const QString& host) {
         }
     }
 
-    // Last resort: add a display. Passing allowUiHelper=false keeps VDD
-    // Control's console from being thrown over the user's desktop, which is
-    // what made this path unbearable before. It still restarts the driver, so
-    // it runs only when nothing existing could be attached.
+    // Last resort: add a device node. On this driver that is the only thing
+    // that produces a monitor — the settings-file route reported success and
+    // created nothing, restarting the driver under a live stream once per
+    // attempt. Adding a node needs admin, so this raises one UAC prompt.
     LogManager::instance().log(
-        "Sender: No attached virtual display is free — creating one for this receiver");
-    if (m_vdd->createVirtualDisplay(1920, 1080, 60, /*allowUiHelper=*/false)) {
+        "Sender: No attached virtual display is free — adding one for this receiver");
+    if (m_vdd->addVddDeviceNode()) {
         for (const auto& mon : m_vdd->enumerateMonitors()) {
             if (attachedAndFree(mon)) return mon.name;
         }

@@ -1268,9 +1268,16 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
         return true;
     }
 
-    // Method 2: Modify settings file + notify driver
+    // Method 2: settings file + driver restart.
+    //
+    // On this driver monitors come from device nodes, so this can report success
+    // while producing nothing — it did exactly that in the field, appending an
+    // entry per attempt and restarting the driver under a live stream. Snapshot
+    // the monitor count so the result can be verified and rolled back.
+    const int monitorsBefore = enumerateMonitors().size();
     VDD_LOG("VDD: Named pipe unavailable, trying settings file method...");
     auto displays = readVddSettings();
+    const auto displaysBefore = displays;
     displays.append({width, height, refreshRate});
 
     if (!writeVddSettings(displays)) {
@@ -1281,6 +1288,19 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
 
     if (!notifyDriverRefresh()) {
         emit error("Failed to notify VDD driver — try restarting the driver manually");
+        return false;
+    }
+
+    QThread::msleep(1500);
+    if (enumerateMonitors().size() <= monitorsBefore) {
+        // Nothing appeared. Undo the settings entry so repeated attempts do not
+        // leave a growing list of phantom displays behind.
+        VDD_LOG("VDD: Settings file written but no new monitor appeared — "
+                "this driver needs a new device node, which requires administrator "
+                "rights. Rolling the settings file back.");
+        writeVddSettings(displaysBefore);
+        emit error("Could not add a virtual display. Adding one needs administrator "
+                   "rights on this driver.");
         return false;
     }
 
@@ -1566,6 +1586,80 @@ QVector<VirtualDisplayVDD::VddDevice> VirtualDisplayVDD::enumerateVddDevices() c
     SetupDiDestroyDeviceInfoList(devInfo);
 #endif
     return devices;
+}
+
+// Create a new root-enumerated VDD device node, elevated.
+//
+// The settings-file route reports success and produces nothing on this driver:
+// monitors come from device nodes, so writing vdd_settings.xml just grew the
+// file by one entry per attempt while restarting the driver under a live
+// stream. devcon install is what actually adds a monitor, and it needs admin.
+bool VirtualDisplayVDD::addVddDeviceNode() {
+#ifdef _WIN32
+    if (m_vddPath.isEmpty()) return false;
+
+    QString inf = m_vddPath + "/MttVDD.inf";
+    if (!QFileInfo::exists(inf)) {
+        QDir dir(m_vddPath);
+        const QStringList infs = dir.entryList({"*.inf"}, QDir::Files);
+        if (infs.isEmpty()) {
+            VDD_LOG("VDD: No .inf in " + m_vddPath + " — cannot add a display");
+            return false;
+        }
+        inf = m_vddPath + "/" + infs.first();
+    }
+
+    const QString devcon = m_vddPath + "/devcon.exe";
+    QString args;
+    QString exe;
+    if (QFileInfo::exists(devcon)) {
+        exe = devcon;
+        args = QString("install \"%1\" Root\MttVDD").arg(QDir::toNativeSeparators(inf));
+    } else {
+        exe = "pnputil.exe";
+        args = QString("/add-driver \"%1\" /install").arg(QDir::toNativeSeparators(inf));
+    }
+
+    const int before = enumerateVddDevices().size();
+    emit statusChanged("Adding a virtual display — approve the administrator prompt");
+
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    sei.lpVerb = L"runas";
+    const std::wstring wexe = QDir::toNativeSeparators(exe).toStdWString();
+    const std::wstring wargs = args.toStdWString();
+    sei.lpFile = wexe.c_str();
+    sei.lpParameters = wargs.c_str();
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteExW(&sei)) {
+        const DWORD err = GetLastError();
+        VDD_LOG(QString("VDD: Could not launch the display-creation helper (error %1)").arg(err));
+        emit error(err == ERROR_CANCELLED
+                       ? QString("Adding a virtual display needs administrator approval.")
+                       : QString("Could not add a virtual display (error %1).").arg(err));
+        return false;
+    }
+    if (sei.hProcess) {
+        WaitForSingleObject(sei.hProcess, 60000);
+        CloseHandle(sei.hProcess);
+    }
+
+    QThread::msleep(1500);
+    const int after = enumerateVddDevices().size();
+    VDD_LOG(QString("VDD: Device nodes %1 -> %2").arg(before).arg(after));
+    if (after <= before) {
+        emit error("The virtual display was not created. Try running BetterCast as "
+                   "administrator, or add one from VDD Control.");
+        return false;
+    }
+    m_createdDisplayCount = after;
+    emit virtualDisplayCreated(-1);
+    return true;
+#else
+    return false;
+#endif
 }
 
 bool VirtualDisplayVDD::removeVddDevices(int keep) {

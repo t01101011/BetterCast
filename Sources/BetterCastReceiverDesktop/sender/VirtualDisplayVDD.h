@@ -88,6 +88,11 @@ public:
     };
     QVector<VddDevice> enumerateVddDevices() const;
 
+    // Add another VDD device node. On this driver one node == one monitor, and
+    // creating a node needs administrator rights, so this raises a single UAC
+    // prompt. Writing vdd_settings.xml does NOT add monitors here.
+    bool addVddDeviceNode();
+
     // Remove VDD device nodes, keeping the first `keep` of them.
     // Requires administrator rights, so this triggers a single UAC prompt
     // rather than elevating the whole app.
