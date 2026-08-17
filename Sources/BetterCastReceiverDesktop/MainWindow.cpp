@@ -22,6 +22,7 @@
 // noticed. Keep them out here.
 #include "Icons.h"
 #include "Theme.h"
+#include <QSettings>
 #include <QPainter>
 #include <QPainterPath>
 #include <QStyleHints>
@@ -257,6 +258,46 @@ MainWindow::~MainWindow() {
 
 // ─── UI Setup ───────────────────────────────────────────────────────────────────
 
+// Occasional nudge towards the donation page.
+//
+// Honour system: there is no way for the app to learn that someone paid — Whop
+// does not tell it — so "I've already donated" is taken at face value and
+// silences it for good. Deliberately NOT shown on every launch: a nag that
+// appears each time is the fastest route to one-star reviews. Every fifth
+// launch, and never before the fifth, so a first impression is never a request
+// for money.
+void MainWindow::maybeShowSupportPrompt() {
+    QSettings settings("BetterCast", "BetterCast");
+    if (settings.value("support/dismissedForever", false).toBool()) return;
+
+    const int launches = settings.value("support/launchCount", 0).toInt() + 1;
+    settings.setValue("support/launchCount", launches);
+    if (launches < 5 || launches % 5 != 0) return;
+
+    QMessageBox box(this);
+    box.setWindowTitle("Support BetterCast");
+    box.setIconPixmap(Icons::rounded(QPixmap(":/appicon.png"), 56));
+    box.setText("<b>Enjoying BetterCast?</b>");
+    box.setInformativeText(
+        "BetterCast is free and open source, built in my spare time.\n\n"
+        "If it is useful to you, a donation helps keep it going.");
+
+    auto* donate = box.addButton("Buy me a coffee", QMessageBox::AcceptRole);
+    auto* later = box.addButton("Maybe later", QMessageBox::RejectRole);
+    auto* never = box.addButton("I've already donated", QMessageBox::DestructiveRole);
+    box.setDefaultButton(later);
+    box.exec();
+
+    if (box.clickedButton() == donate) {
+        QDesktopServices::openUrl(QUrl("https://whop.com/bettercast/bettercast-donate/"));
+        // Opening the page is treated as done — pestering someone who just
+        // followed the link is the worst possible follow-up.
+        settings.setValue("support/dismissedForever", true);
+    } else if (box.clickedButton() == never) {
+        settings.setValue("support/dismissedForever", true);
+    }
+}
+
 void MainWindow::applyTheme() {
     const Theme::Palette p = Theme::activePalette();
     // Palette first: the stylesheet and many inline styles reference
@@ -347,6 +388,9 @@ void MainWindow::setupUi() {
 
     // Select Overview by default
     selectSidebarItem(m_pageOverview);
+
+    // Deferred so it appears over a drawn window rather than mid-construction.
+    QTimer::singleShot(1200, this, [this]() { maybeShowSupportPrompt(); });
 }
 
 void MainWindow::setupSidebar() {

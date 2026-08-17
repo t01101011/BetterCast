@@ -155,6 +155,7 @@ private:
 
     void setupUi();
     void applyTheme();       // rebuild the stylesheet for the current OS theme
+    void maybeShowSupportPrompt();   // occasional, dismissible donation nudge
     void setupSidebar();
     void rebuildSidebar();          // re-run whenever the device list changes
     void setupDevicePage();

@@ -1635,8 +1635,15 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
                     .arg(QDir::toNativeSeparators(inf));
     }
 
+    // cmd /s /c "<whole thing>" — the outer quotes and /s are required.
+    //
+    // Without them, cmd sees a command starting with a quote, applies its own
+    // quote-stripping rule and mangles the line: the previous version returned
+    // exit code 1 having created nothing and written no log. Direct
+    // ShellExecuteEx on devcon.exe worked fine; wrapping it for logging is what
+    // broke it. /s tells cmd to strip exactly the outer pair and leave the rest.
     const QString exe = "cmd.exe";
-    const QString args = QString("/c %1 > \"%2\" 2>&1").arg(inner, logPath);
+    const QString args = QString("/s /c \"%1 > \"%2\" 2>&1\"").arg(inner, logPath);
     VDD_LOG("VDD: Running elevated: " + inner);
 
     const int before = enumerateVddDevices().size();
