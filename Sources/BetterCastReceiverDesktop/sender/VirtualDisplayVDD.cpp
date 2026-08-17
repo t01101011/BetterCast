@@ -1666,8 +1666,8 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
     if (out.open(QIODevice::ReadOnly | QIODevice::Text)) {
         const QString text = QString::fromLocal8Bit(out.readAll()).trimmed();
         out.close();
-        for (const QString& line : text.split('
-', Qt::SkipEmptyParts)) {
+        const QStringList lines = text.split(QChar('\n'), Qt::SkipEmptyParts);
+        for (const QString& line : lines) {
             VDD_LOG("VDD: > " + line.trimmed());
         }
     } else {
