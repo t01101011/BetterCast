@@ -902,11 +902,32 @@ void VirtualDisplayVDD::restorePrimaryMode() {
     target.dmSize = sizeof(target);
     target.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_BITSPERPEL;
 
-    LONG r = ChangeDisplaySettingsExW(nullptr, &target, nullptr, CDS_UPDATEREGISTRY, nullptr);
+    // CDS_NORESET + an explicit commit, NOT a bare CDS_UPDATEREGISTRY.
+    //
+    // Applying a primary mode change immediately makes Windows re-evaluate the
+    // whole topology, which detached the virtual displays that had just been
+    // extended — every receiver then found nothing to capture, fell through to
+    // creating another display, and the app ended up restarting the driver in a
+    // loop. Staging the change and committing once keeps it a mode change
+    // rather than a topology event.
+    LONG r = ChangeDisplaySettingsExW(nullptr, &target, nullptr,
+                                      CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+    if (r == DISP_CHANGE_SUCCESSFUL) {
+        r = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+    }
     if (r != DISP_CHANGE_SUCCESSFUL) {
         VDD_LOG("VDD: Could not restore the primary display mode — " + dispChangeName(r));
-    } else {
-        VDD_LOG("VDD: Primary display mode restored");
+        return;
+    }
+    VDD_LOG("VDD: Primary display mode restored");
+
+    // A working extended desktop matters more than an exact refresh rate. If
+    // the restore re-mirrored things anyway, put extend back and leave the mode.
+    const TopologyState after = queryTopology();
+    if (after.valid && after.anyCloned) {
+        VDD_LOG("VDD: Restoring the primary re-mirrored the desktop — "
+                "re-applying Extend and keeping the current refresh rate");
+        applyTopology(Topology::Extend);
     }
 #endif
 }
@@ -1070,8 +1091,11 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
         TopologyState after = queryTopology();
         VDD_LOG("VDD: Topology after: " + after.describe());
         if (after.valid && !after.anyCloned) {
-            restorePrimaryMode();
+            // Lay the displays out first, then put the primary's mode back.
+            // Doing the restore first re-triggered a topology change and undid
+            // the extend before anything could be positioned or captured.
             positionVirtualDisplay();
+            restorePrimaryMode();
             emit statusChanged("Display extended");
             return true;
         }

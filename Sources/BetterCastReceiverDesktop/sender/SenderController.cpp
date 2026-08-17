@@ -99,14 +99,17 @@ QString SenderController::claimDisplayFor(const QString& host) {
         }
     }
 
-    // Still nothing usable — create a new display as a last resort.
+    // Deliberately NOT creating a display here.
+    //
+    // createVirtualDisplay() launches VDD Control, waits ten seconds for its
+    // named pipe, appends to vdd_settings.xml and restarts the driver. Doing
+    // that automatically on every failed claim popped the driver's console over
+    // the user's desktop, restarted the driver underneath any live stream, and
+    // grew the settings file by one display per attempt — all while still not
+    // producing anything capturable. Creating a display is disruptive enough to
+    // be an explicit choice.
     LogManager::instance().log(
-        "Sender: No spare virtual display for this receiver, creating one...");
-    if (m_vdd->createVirtualDisplay(1920, 1080, 60)) {
-        for (const auto& mon : m_vdd->enumerateMonitors()) {
-            if (attachedAndFree(mon)) return mon.name;
-        }
-    }
+        "Sender: No attached virtual display is free for this receiver");
     return QString();
 }
 
@@ -153,8 +156,9 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     if (s->displayName.isEmpty() || displayInUse(s->displayName)) {
         const QString claimed = claimDisplayFor(receiverHost);
         if (claimed.isEmpty()) {
-            emit error(QString("No free display for %1. Create another virtual "
-                               "display, or stop an existing stream.").arg(receiverHost));
+            emit error(QString("No display available for %1. Press \"Create Virtual "
+                               "Display\", or stop a stream that is using one.")
+                           .arg(receiverHost));
             delete s;
             return false;
         }
