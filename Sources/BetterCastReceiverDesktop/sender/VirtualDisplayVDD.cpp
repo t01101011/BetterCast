@@ -617,6 +617,98 @@ bool VirtualDisplayVDD::activateVirtualDisplay() {
     return false;
 }
 
+bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
+                                             int width, int height, int refreshRate) {
+#ifdef _WIN32
+    if (deviceName.isEmpty()) return false;
+    const std::wstring wname = deviceName.toStdWString();
+
+    DISPLAY_DEVICEW dd = {};
+    dd.cb = sizeof(dd);
+    bool found = false;
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
+        if (deviceName.compare(QString::fromWCharArray(dd.DeviceName), Qt::CaseInsensitive) == 0) {
+            found = true;
+            break;
+        }
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+    if (!found) {
+        VDD_LOG("VDD: " + deviceName + " not found, cannot attach");
+        return false;
+    }
+    if (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
+        return true;   // already live
+    }
+
+    // Park it past everything currently on the desktop so it extends rather
+    // than lands on top of another display.
+    LONG rightEdge = 0;
+    DISPLAY_DEVICEW scan = {};
+    scan.cb = sizeof(scan);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &scan, 0); i++) {
+        if (scan.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) {
+            DEVMODEW m = {};
+            m.dmSize = sizeof(m);
+            if (EnumDisplaySettingsW(scan.DeviceName, ENUM_CURRENT_SETTINGS, &m)) {
+                rightEdge = qMax(rightEdge, m.dmPosition.x + static_cast<LONG>(m.dmPelsWidth));
+            }
+        }
+        scan = {};
+        scan.cb = sizeof(scan);
+    }
+
+    // Start from the mode the driver last recorded, so we keep whatever it
+    // considers valid, then force the fields we care about.
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (!EnumDisplaySettingsW(wname.c_str(), ENUM_REGISTRY_SETTINGS, &dm)) {
+        dm = {};
+        dm.dmSize = sizeof(dm);
+    }
+    if (dm.dmPelsWidth == 0 || dm.dmPelsHeight == 0) {
+        dm.dmPelsWidth = static_cast<DWORD>(width);
+        dm.dmPelsHeight = static_cast<DWORD>(height);
+    }
+    dm.dmBitsPerPel = 32;
+    dm.dmDisplayFrequency = static_cast<DWORD>(refreshRate);
+    dm.dmPosition.x = rightEdge;
+    dm.dmPosition.y = 0;
+    dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT |
+                  DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+
+    LONG ret = ChangeDisplaySettingsExW(wname.c_str(), &dm, nullptr,
+                                        CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+    if (ret != DISP_CHANGE_SUCCESSFUL) {
+        // Some IDD drivers refuse an explicit refresh rate; retry without it.
+        dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        ret = ChangeDisplaySettingsExW(wname.c_str(), &dm, nullptr,
+                                       CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+    }
+    if (ret != DISP_CHANGE_SUCCESSFUL) {
+        VDD_LOG(QString("VDD: Could not attach %1 — %2")
+                    .arg(deviceName, dispChangeName(ret)));
+        return false;
+    }
+
+    LONG commit = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+    if (commit != DISP_CHANGE_SUCCESSFUL) {
+        VDD_LOG("VDD: Attach commit returned " + dispChangeName(commit));
+        return false;
+    }
+
+    VDD_LOG(QString("VDD: Attached %1 at %2,0 (%3x%4)")
+                .arg(deviceName).arg(rightEdge)
+                .arg(dm.dmPelsWidth).arg(dm.dmPelsHeight));
+    QThread::msleep(700);   // let the desktop settle before anything captures it
+    return true;
+#else
+    Q_UNUSED(deviceName); Q_UNUSED(width); Q_UNUSED(height); Q_UNUSED(refreshRate);
+    return false;
+#endif
+}
+
 // ─── Display Topology (extend vs. mirror) ──────────────────────────────────────
 
 QString VirtualDisplayVDD::TopologyState::describe() const {

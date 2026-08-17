@@ -82,6 +82,12 @@ public:
     // rather than elevating the whole app.
     bool removeVddDevices(int keep = 0);
 
+    // Attach a specific virtual display to the desktop and place it beside the
+    // others. A VDD device node can exist while its monitor is detached — it
+    // then reports 0x0 and has no framebuffer, so capturing it yields nothing.
+    bool attachVirtualDisplay(const QString& deviceName,
+                              int width = 1920, int height = 1080, int refreshRate = 60);
+
     // Display topology
     TopologyState queryTopology() const;
 

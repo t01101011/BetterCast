@@ -1649,10 +1649,13 @@ void MainWindow::onRefreshMonitors() {
     }
 
     for (const auto& mon : monitors) {
-        QString label = QString("%1  %2x%3  (%4)")
-                            .arg(mon.name)
-                            .arg(mon.width).arg(mon.height)
-                            .arg(mon.adapterName);
+        // A detached display reports 0x0 and has no framebuffer. Saying so is
+        // far more useful than showing "0x0" and letting capture fail later.
+        const bool detached = (mon.width <= 0 || mon.height <= 0);
+        QString label = detached
+            ? QString("%1  not attached  (%2)").arg(mon.name, mon.adapterName)
+            : QString("%1  %2x%3  (%4)").arg(mon.name)
+                  .arg(mon.width).arg(mon.height).arg(mon.adapterName);
         if (mon.isVirtual) {
             label += "  [Virtual]";
         }
@@ -1661,22 +1664,38 @@ void MainWindow::onRefreshMonitors() {
         data["adapter"] = mon.adapterIndex;
         data["output"] = mon.outputIndex;
         data["virtual"] = mon.isVirtual;
+        data["attached"] = !detached;
         data["displayName"] = mon.name;
         m_monitorCombo->addItem(label, data);
     }
 
-    // Default to a virtual display when one exists. The combo used to land on
-    // index 0 — the primary — so anyone with pre-existing virtual displays
-    // silently streamed their own main screen and it looked like mirroring.
+    // Default to a virtual display when one exists, preferring one that is
+    // actually attached. The combo used to land on index 0 — the primary — so
+    // anyone with pre-existing virtual displays silently streamed their own
+    // main screen and it looked like mirroring.
     int firstVirtual = -1;
+    int firstAttachedVirtual = -1;
     int virtualCount = 0;
+    int detachedCount = 0;
     for (int i = 0; i < m_monitorCombo->count(); i++) {
-        if (m_monitorCombo->itemData(i).toMap().value("virtual", false).toBool()) {
-            if (firstVirtual < 0) firstVirtual = i;
-            virtualCount++;
+        const QVariantMap d = m_monitorCombo->itemData(i).toMap();
+        if (!d.value("virtual", false).toBool()) continue;
+        virtualCount++;
+        if (firstVirtual < 0) firstVirtual = i;
+        if (d.value("attached", true).toBool()) {
+            if (firstAttachedVirtual < 0) firstAttachedVirtual = i;
+        } else {
+            detachedCount++;
         }
     }
-    if (firstVirtual >= 0) m_monitorCombo->setCurrentIndex(firstVirtual);
+    const int preferred = firstAttachedVirtual >= 0 ? firstAttachedVirtual : firstVirtual;
+    if (preferred >= 0) m_monitorCombo->setCurrentIndex(preferred);
+    if (detachedCount > 0) {
+        LogManager::instance().log(
+            QString("Note: %1 virtual display(s) are not attached to the desktop and "
+                    "have nothing to capture. BetterCast will attach one automatically "
+                    "when it needs it; use Remove to clear leftovers.").arg(detachedCount));
+    }
 
     // Remove is meaningful whenever any virtual display is present, including
     // ones left behind by earlier installs.

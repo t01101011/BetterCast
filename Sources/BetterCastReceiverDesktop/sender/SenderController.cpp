@@ -68,17 +68,43 @@ QString SenderController::claimDisplayFor(const QString& host) {
     Q_UNUSED(host);
     if (!m_vdd) return QString();
 
-    // Prefer an unused virtual display.
+    // A VDD device node can exist while its monitor is detached from the
+    // desktop; it then reports 0x0 and has no framebuffer at all. Handing one
+    // of those to capture is what made every receiver after the first show the
+    // primary panel — capture failed and fell through to the whole desktop.
+    // Only ever claim a display that is actually attached.
+    auto attachedAndFree = [this](const VirtualDisplayVDD::MonitorInfo& m) {
+        return m.isVirtual && m.width > 0 && m.height > 0 && !displayInUse(m.name);
+    };
+
     for (const auto& mon : m_vdd->enumerateMonitors()) {
-        if (mon.isVirtual && !displayInUse(mon.name)) return mon.name;
+        if (attachedAndFree(mon)) return mon.name;
     }
 
-    // None free — make one, then look again.
+    // Nothing attached and free. Prefer waking a detached node we already have
+    // over adding another one — the machine accumulates monitors otherwise.
+    for (const auto& mon : m_vdd->enumerateMonitors()) {
+        if (!mon.isVirtual || displayInUse(mon.name)) continue;
+        if (mon.width > 0 && mon.height > 0) continue;   // already handled above
+
+        LogManager::instance().log(
+            "Sender: " + mon.name + " exists but is detached — attaching it");
+        if (m_vdd->attachVirtualDisplay(mon.name)) {
+            for (const auto& refreshed : m_vdd->enumerateMonitors()) {
+                if (refreshed.name.compare(mon.name, Qt::CaseInsensitive) == 0 &&
+                    refreshed.width > 0 && refreshed.height > 0) {
+                    return refreshed.name;
+                }
+            }
+        }
+    }
+
+    // Still nothing usable — create a new display as a last resort.
     LogManager::instance().log(
         "Sender: No spare virtual display for this receiver, creating one...");
     if (m_vdd->createVirtualDisplay(1920, 1080, 60)) {
         for (const auto& mon : m_vdd->enumerateMonitors()) {
-            if (mon.isVirtual && !displayInUse(mon.name)) return mon.name;
+            if (attachedAndFree(mon)) return mon.name;
         }
     }
     return QString();
@@ -133,6 +159,22 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
             return false;
         }
         s->displayName = claimed;
+    } else if (m_vdd) {
+        // An explicitly chosen display may still be a detached VDD monitor
+        // (0x0 in the picker). Attach it rather than capturing nothing.
+        for (const auto& mon : m_vdd->enumerateMonitors()) {
+            if (mon.name.compare(s->displayName, Qt::CaseInsensitive) != 0) continue;
+            if (mon.isVirtual && (mon.width <= 0 || mon.height <= 0)) {
+                emit statusChanged("Attaching " + s->displayName + "...");
+                if (!m_vdd->attachVirtualDisplay(s->displayName)) {
+                    emit error(s->displayName + " could not be attached to the desktop, "
+                                                "so there is nothing to capture.");
+                    delete s;
+                    return false;
+                }
+            }
+            break;
+        }
     }
 
     LogManager::instance().log(

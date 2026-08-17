@@ -329,10 +329,23 @@ bool ScreenCaptureWin::captureFrameDxgi() {
 bool ScreenCaptureWin::initGdiFallback() {
     if (m_displayName.isEmpty()) {
         m_gdiDC = CreateDCA("DISPLAY", nullptr, nullptr, nullptr);
+        if (!m_gdiDC) m_gdiDC = GetDC(nullptr);  // no target named — whole desktop is fine
     } else {
         m_gdiDC = CreateDCA(nullptr, m_displayName.toLocal8Bit().constData(), nullptr, nullptr);
+        // Deliberately NOT falling back to GetDC(nullptr) here. That grabs the
+        // whole virtual desktop, so asking for a display we cannot open used to
+        // silently stream the primary panel instead — which looks exactly like
+        // the receiver mirroring your main screen. Fail loudly instead.
+        if (!m_gdiDC) {
+            LogManager::instance().log(
+                "Sender: Cannot open " + m_displayName +
+                " for capture — it is most likely not attached to the desktop.");
+            emit error(m_displayName + " is not attached to the desktop, so there is "
+                                       "nothing to capture. Extend it in Display Settings, "
+                                       "or let BetterCast attach it for you.");
+            return false;
+        }
     }
-    if (!m_gdiDC) m_gdiDC = GetDC(nullptr);  // whole virtual desktop
     if (!m_gdiDC) {
         LogManager::instance().log("Sender: GDI CreateDC failed");
         return false;
