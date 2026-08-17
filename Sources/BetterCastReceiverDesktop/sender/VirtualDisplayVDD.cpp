@@ -1881,9 +1881,22 @@ bool VirtualDisplayVDD::writeVddSettings(const QVector<VddResolution>& displays)
         settingsPath = m_vddPath + "/" + kSettingsFiles.first();
     }
 
-    QFile file(settingsPath);
+    // vdd_settings.xml usually lives under C:\Program Files, which is not
+    // writable without elevation. A plain open() fails there, and because that
+    // failure was only reported through a signal nothing was listening to at
+    // startup, the resolution list silently stayed empty — which is why every
+    // virtual display was stuck at the driver's 800x600 default.
+    //
+    // Build the XML in a temp file first; if the direct write is refused, copy
+    // it into place elevated.
+    const bool directWritable = QFileInfo(QFileInfo(settingsPath).absolutePath()).isWritable();
+    const QString stagePath = directWritable
+        ? settingsPath
+        : QDir::temp().filePath("bettercast_vdd_settings.xml");
+
+    QFile file(stagePath);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning() << "VDD: Cannot write settings to" << settingsPath;
+        qWarning() << "VDD: Cannot write settings to" << stagePath;
         return false;
     }
 
@@ -1906,6 +1919,44 @@ bool VirtualDisplayVDD::writeVddSettings(const QVector<VddResolution>& displays)
     xml.writeEndDocument();
 
     file.close();
+
+    if (!directWritable) {
+#ifdef _WIN32
+        // Copy into Program Files behind a single UAC prompt.
+        VDD_LOG("VDD: " + settingsPath + " needs administrator rights — "
+                "copying the new settings into place elevated");
+        const QString args = QString("/s /c \"copy /Y \"%1\" \"%2\"\"")
+                                 .arg(QDir::toNativeSeparators(stagePath),
+                                      QDir::toNativeSeparators(settingsPath));
+
+        SHELLEXECUTEINFOW sei = {};
+        sei.cbSize = sizeof(sei);
+        sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+        sei.lpVerb = L"runas";
+        sei.lpFile = L"cmd.exe";
+        const std::wstring wargs = args.toStdWString();
+        sei.lpParameters = wargs.c_str();
+        sei.nShow = SW_HIDE;
+
+        if (!ShellExecuteExW(&sei)) {
+            VDD_LOG(QString("VDD: Elevated copy refused (error %1)").arg(GetLastError()));
+            return false;
+        }
+        DWORD rc = 1;
+        if (sei.hProcess) {
+            WaitForSingleObject(sei.hProcess, 60000);
+            GetExitCodeProcess(sei.hProcess, &rc);
+            CloseHandle(sei.hProcess);
+        }
+        if (rc != 0) {
+            VDD_LOG(QString("VDD: Elevated copy failed (exit %1)").arg(static_cast<int>(rc)));
+            return false;
+        }
+#else
+        return false;
+#endif
+    }
+
     VDD_LOG(QString("VDD: Wrote %1 display(s) to %2").arg(displays.size()).arg(settingsPath));
     return true;
 }
