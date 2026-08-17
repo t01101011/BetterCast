@@ -96,6 +96,7 @@ set(SOURCES
     main.cpp
     MainWindow.cpp
     Theme.cpp
+    DisplayArrangement.cpp
     NetworkListener.cpp
     VideoDecoder.cpp
     VideoRenderer.cpp
@@ -110,6 +111,7 @@ set(SOURCES
 set(HEADERS
     MainWindow.h
     Theme.h
+    DisplayArrangement.h
     Icons.h
     NetworkListener.h
     VideoDecoder.h

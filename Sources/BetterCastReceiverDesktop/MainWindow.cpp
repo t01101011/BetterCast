@@ -22,6 +22,7 @@
 // noticed. Keep them out here.
 #include "Icons.h"
 #include "Theme.h"
+#include "DisplayArrangement.h"
 #include <QSettings>
 #include <QPainter>
 #include <QPainterPath>
@@ -152,6 +153,14 @@ MainWindow::MainWindow(QWidget* parent)
     // rather than a single on/off state.
     connect(m_sender, &SenderController::sessionsChanged, this, [this]() {
         const int n = m_sender->sessionCount();
+        if (m_arrangement) {
+            QStringList live;
+            for (const QString& host : m_sender->activeReceivers()) {
+                const QString d = m_sender->displayForReceiver(host);
+                if (!d.isEmpty()) live << d;
+            }
+            m_arrangement->setActiveDisplays(live);
+        }
         if (m_stopSendBtn) m_stopSendBtn->setEnabled(n > 0);
         if (m_sendBtn) m_sendBtn->setEnabled(true);          // more receivers may be added
         if (m_sendHostEdit) m_sendHostEdit->setEnabled(true);
@@ -549,6 +558,26 @@ void MainWindow::setupOverviewPage() {
 
     layout->addSpacing(12);
 
+    // Display arrangement — the macOS overview's "Displays" card. Shows the
+    // real screen on its own until virtual displays are attached, so it is
+    // useful even with nothing connected.
+    auto* displaysCard = makeCard("Displays");
+    auto* displaysLayout = new QVBoxLayout(displaysCard);
+    displaysLayout->setSpacing(8);
+
+    m_arrangement = new DisplayArrangement();
+    displaysLayout->addWidget(m_arrangement);
+
+    auto* arrangeHint = new QLabel(
+        "Green marks a display being streamed. Drag displays around in Windows "
+        "Display Settings to change the arrangement.");
+    arrangeHint->setWordWrap(true);
+    arrangeHint->setStyleSheet("font-size: 11px; color: palette(mid);");
+    displaysLayout->addWidget(arrangeHint);
+
+    layout->addWidget(displaysCard);
+    layout->addSpacing(12);
+
     // Status
     m_overviewStatusLabel = new QLabel("Searching for devices on your network...");
     m_overviewStatusLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
@@ -712,6 +741,16 @@ void MainWindow::setupSendPage() {
 
     vddBtnRow->addStretch();
     vddLayout->addLayout(vddBtnRow);
+
+    // Adding a display reconfigures the desktop, so a flicker is expected
+    // rather than a fault. Saying so up front avoids it reading as a crash.
+    auto* flickerNote = new QLabel(
+        "Adding a virtual display briefly reconfigures your desktop — expect your "
+        "screens to flicker or go black for a second. Existing streams may need "
+        "restarting afterwards.");
+    flickerNote->setWordWrap(true);
+    flickerNote->setStyleSheet("font-size: 11px; color: palette(mid);");
+    vddLayout->addWidget(flickerNote);
 
     layout->addWidget(vddCard);
 

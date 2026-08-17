@@ -95,6 +95,7 @@ class AudioDecoder;
 class AudioPlayer;
 class AdbHelper;
 class VideoWindow;
+class DisplayArrangement;
 #ifdef ENABLE_SENDER
 class SenderController;
 class VirtualDisplayVDD;
@@ -206,6 +207,7 @@ private:
     QLabel* m_deviceSubtitleLabel = nullptr;
 
     // Overview page
+    DisplayArrangement* m_arrangement = nullptr;
     QLabel* m_overviewStatusLabel = nullptr;
     QLabel* m_overviewIpLabel = nullptr;
 
