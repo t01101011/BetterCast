@@ -7,10 +7,25 @@ on:
       - '.github/workflows/build-windows-receiver.yml'
   workflow_dispatch:  # Manual trigger from GitHub UI
 
+# Only one Windows build per branch at a time.
+#
+# Without this, pushing twice in quick succession left two runs compiling the
+# same vcpkg tree concurrently. The second started before the first had saved
+# its cache, found nothing to restore, and died in the FFmpeg step — a green
+# commit and the commit right after it failing for no reason of its own.
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   QT_VERSION: '6.7.0'
   VDD_VERSION: '25.7.23'  # Virtual Display Driver release tag
+  VCPKG_SPEC: 'ffmpeg[x264,nvcodec,amf]:x64-windows'
+  # Bump this whenever VCPKG_SPEC changes. Keying the cache on this rather than
+  # on a hash of the whole workflow file means ordinary edits here no longer
+  # throw away a 30-minute FFmpeg build.
+  VCPKG_CACHE_TAG: 'ffmpeg-x264-nvcodec-amf-v1'
 
 jobs:
   build-windows:
@@ -42,9 +57,10 @@ jobs:
             C:/vcpkg/installed
             C:/vcpkg/buildtrees
             C:/vcpkg/packages
-          key: vcpkg-ffmpeg-x64-windows-${{ hashFiles('.github/workflows/build-windows-receiver.yml') }}
+          # Keyed on the package set, not on a hash of this file.
+          key: vcpkg-x64-windows-${{ env.VCPKG_CACHE_TAG }}
           restore-keys: |
-            vcpkg-ffmpeg-x64-windows-
+            vcpkg-x64-windows-
 
       - name: Install FFmpeg via vcpkg (x264 + hardware encoders)
         shell: pwsh
@@ -54,7 +70,7 @@ jobs:
           # sender silently falls back to libx264 for every stream — three
           # concurrent 1080p60 software encodes will bury a laptop CPU, which
           # showed up as a black screen on the third receiver.
-          vcpkg install "ffmpeg[x264,nvcodec,amf]:x64-windows" --recurse
+          vcpkg install "$env:VCPKG_SPEC" --recurse
         env:
           VCPKG_ROOT: C:/vcpkg
 
