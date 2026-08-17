@@ -13,6 +13,7 @@
 #ifdef ENABLE_SENDER
 #include "sender/SenderController.h"
 #include "sender/VirtualDisplayVDD.h"
+#include "Icons.h"
 #endif
 
 #include <QVBoxLayout>
@@ -368,6 +369,7 @@ void MainWindow::setupUi() {
     setupOverviewPage();
 #ifdef ENABLE_SENDER
     setupSendPage();
+    setupDevicePage();
 #endif
     setupReceivePage();
     setupSettingsPage();
@@ -393,20 +395,81 @@ void MainWindow::setupUi() {
 }
 
 void MainWindow::setupSidebar() {
+    rebuildSidebar();
+}
+
+int MainWindow::indexOfDevice(const QString& name) const {
+    for (int i = 0; i < m_devices.size(); i++) {
+        if (m_devices[i].name == name) return i;
+    }
+    return -1;
+}
+
+// Device-centric sidebar, mirroring the macOS SidebarView: discovered devices
+// are rows under "Devices" rather than being buried in a dropdown on a Send
+// page. Rebuilt from scratch whenever the device list changes, so it has to
+// preserve the current selection itself.
+void MainWindow::rebuildSidebar() {
+    if (!m_sidebarList) return;
+
+    const QString keepDevice = m_selectedDeviceName;
+    const int keepPage = m_sidebarList->currentItem()
+                             ? m_sidebarList->currentItem()->data(Qt::UserRole).toInt()
+                             : m_pageOverview;
+
+    QSignalBlocker block(m_sidebarList);   // repopulating must not fire selection
+    m_sidebarList->clear();
+
     addSidebarSection(m_sidebarList, "DEVICES");
-    addSidebarItem(m_sidebarList, QString::fromUtf8("\xF0\x9F\x96\xA5"), "Overview", m_pageOverview);
+    addSidebarItem(m_sidebarList, Icons::overview(), "Overview", m_pageOverview);
 
 #ifdef ENABLE_SENDER
+    if (m_devices.isEmpty()) {
+        auto* searching = new QListWidgetItem("     Searching\xE2\x80\xA6");
+        searching->setFlags(Qt::ItemIsEnabled);
+        searching->setData(Qt::UserRole, -1);
+        searching->setForeground(QColor("#777"));
+        searching->setSizeHint(QSize(0, 30));
+        m_sidebarList->addItem(searching);
+    } else {
+        for (const auto& dev : m_devices) {
+            auto* item = new QListWidgetItem(
+                QString("%1  %2").arg(Icons::forDeviceName(dev.name), dev.name));
+            item->setData(Qt::UserRole, m_pageDevice);
+            item->setData(Qt::UserRole + 1, dev.name);
+            item->setSizeHint(QSize(0, 42));
+            item->setToolTip(QString("%1\n%2:%3\n%4")
+                                 .arg(dev.name, dev.host)
+                                 .arg(dev.port)
+                                 .arg(dev.connected ? "Connected" : "Available"));
+            if (dev.connected) item->setForeground(QColor("#4caf50"));
+            m_sidebarList->addItem(item);
+        }
+    }
+
     addSidebarSection(m_sidebarList, "SEND");
-    addSidebarItem(m_sidebarList, QString::fromUtf8("\xF0\x9F\x93\xA4"), "Send Screen", m_pageSend);
+    addSidebarItem(m_sidebarList, Icons::send(), "Send Screen", m_pageSend);
 #endif
 
     addSidebarSection(m_sidebarList, "RECEIVE");
-    addSidebarItem(m_sidebarList, QString::fromUtf8("\xF0\x9F\x93\xA5"), "Receive Screen", m_pageReceive);
+    addSidebarItem(m_sidebarList, Icons::receive(), "Receive Screen", m_pageReceive);
 
     addSidebarSection(m_sidebarList, "");
-    addSidebarItem(m_sidebarList, QString::fromUtf8("\xE2\x9A\x99"), "Settings", m_pageSettings);
-    addSidebarItem(m_sidebarList, QString::fromUtf8("\xF0\x9F\x93\x9C"), "Logs", m_pageLogs);
+    addSidebarItem(m_sidebarList, Icons::settings(), "Settings", m_pageSettings);
+    addSidebarItem(m_sidebarList, Icons::logs(), "Logs", m_pageLogs);
+
+    // Restore selection: prefer the same device, else the same fixed page.
+    for (int i = 0; i < m_sidebarList->count(); i++) {
+        auto* item = m_sidebarList->item(i);
+        if (!(item->flags() & Qt::ItemIsSelectable)) continue;
+        const QString dev = item->data(Qt::UserRole + 1).toString();
+        if (!keepDevice.isEmpty() ? dev == keepDevice
+                                  : (dev.isEmpty() && item->data(Qt::UserRole).toInt() == keepPage)) {
+            m_sidebarList->setCurrentItem(item);
+            return;
+        }
+    }
+    selectSidebarItem(keepPage >= 0 ? keepPage : m_pageOverview);
 }
 
 // ─── Overview Page ──────────────────────────────────────────────────────────────
@@ -1092,6 +1155,16 @@ void MainWindow::onSidebarSelectionChanged(int row) {
         return;
     }
 
+    // Device rows carry the device name; everything else is a fixed page.
+    const QString deviceName = item->data(Qt::UserRole + 1).toString();
+    m_selectedDeviceName = deviceName;
+#ifdef ENABLE_SENDER
+    if (!deviceName.isEmpty()) {
+        onDeviceRowSelected(deviceName);
+        return;
+    }
+#endif
+
     m_stack->setCurrentIndex(page);
 }
 
@@ -1346,6 +1419,105 @@ void MainWindow::onRemoveVirtualDisplay() {
     }).detach();
 }
 
+// ─── Per-Device Detail Page ─────────────────────────────────────────────────────
+
+// Mirrors the macOS DiscoveredDeviceView: a page scoped to one receiver, showing
+// how to connect to it and what will be streamed, instead of a single Send form
+// shared by every device.
+void MainWindow::setupDevicePage() {
+    auto* page = new QWidget();
+    auto* scroll = new QScrollArea();
+    scroll->setWidget(page);
+    scroll->setWidgetResizable(true);
+
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(28, 24, 28, 24);
+    layout->setSpacing(16);
+
+    m_deviceTitleLabel = new QLabel();
+    m_deviceTitleLabel->setStyleSheet("font-size: 22px; font-weight: 600; color: white;");
+    layout->addWidget(m_deviceTitleLabel);
+
+    m_deviceSubtitleLabel = new QLabel();
+    m_deviceSubtitleLabel->setStyleSheet("font-size: 13px; color: #888;");
+    layout->addWidget(m_deviceSubtitleLabel);
+
+    // Body is rebuilt per device; keep it in its own container so repopulating
+    // never disturbs the title above it.
+    m_devicePageBody = new QWidget();
+    auto* bodyLayout = new QVBoxLayout(m_devicePageBody);
+    bodyLayout->setContentsMargins(0, 0, 0, 0);
+    bodyLayout->setSpacing(16);
+    layout->addWidget(m_devicePageBody);
+
+    layout->addStretch();
+    m_pageDevice = m_stack->addWidget(scroll);
+}
+
+void MainWindow::populateDevicePage(const DeviceEntry& device) {
+    if (!m_devicePageBody) return;
+
+    m_deviceTitleLabel->setText(device.name);
+    m_deviceSubtitleLabel->setText(
+        QString("%1:%2  \xE2\x80\xA2  %3")
+            .arg(device.host).arg(device.port)
+            .arg(device.connected ? "Connected" : "Available"));
+    m_deviceSubtitleLabel->setStyleSheet(
+        device.connected ? "font-size: 13px; color: #4caf50;"
+                         : "font-size: 13px; color: #888;");
+
+    // Clear the previous device's body.
+    QLayout* bodyLayout = m_devicePageBody->layout();
+    while (QLayoutItem* child = bodyLayout->takeAt(0)) {
+        if (child->widget()) child->widget()->deleteLater();
+        delete child;
+    }
+
+    auto* card = makeCard("Stream to this device");
+    auto* cardLayout = new QVBoxLayout(card);
+    cardLayout->setSpacing(10);
+
+    auto* hint = new QLabel(
+        "Streams the monitor selected on the Send Screen page. Pick a "
+        "[Virtual] display there to extend your desktop rather than mirror it.");
+    hint->setWordWrap(true);
+    hint->setStyleSheet("font-size: 12px; color: #999;");
+    cardLayout->addWidget(hint);
+
+    auto* btnRow = new QHBoxLayout();
+    auto* sendBtn = new QPushButton(Icons::send() + "  Send Screen Here");
+    sendBtn->setStyleSheet(
+        "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
+        "padding: 9px 20px; border-radius: 6px; border: none; }"
+        "QPushButton:hover { background-color: #1a88e0; }");
+    connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
+        if (m_sendHostEdit) m_sendHostEdit->setText(device.host);
+        m_selectedReceiverPort = device.port;
+        selectSidebarItem(m_pageSend);   // the Send page owns monitor + quality
+        onSendScreenClicked();
+    });
+    btnRow->addWidget(sendBtn);
+
+    auto* configureBtn = new QPushButton("Configure\xE2\x80\xA6");
+    connect(configureBtn, &QPushButton::clicked, this, [this, device]() {
+        if (m_sendHostEdit) m_sendHostEdit->setText(device.host);
+        m_selectedReceiverPort = device.port;
+        selectSidebarItem(m_pageSend);
+    });
+    btnRow->addWidget(configureBtn);
+    btnRow->addStretch();
+    cardLayout->addLayout(btnRow);
+
+    bodyLayout->addWidget(card);
+}
+
+void MainWindow::onDeviceRowSelected(const QString& deviceName) {
+    const int idx = indexOfDevice(deviceName);
+    if (idx < 0 || m_pageDevice < 0) return;
+    populateDevicePage(m_devices[idx]);
+    m_stack->setCurrentIndex(m_pageDevice);
+}
+
 void MainWindow::onExtendDisplays() {
     if (!m_sender || !m_sender->vdd() || !m_topologyCombo) return;
 
@@ -1492,6 +1664,17 @@ void MainWindow::onReceiverDiscovered(const DiscoveredService& service) {
     data["host"] = service.host;
     data["port"] = port;
     m_receiverCombo->addItem(entry, data);
+
+    // Keep the sidebar's device list in step — this is what turns the sidebar
+    // device-centric rather than leaving receivers hidden in a dropdown.
+    const int existingIdx = indexOfDevice(service.name);
+    if (existingIdx >= 0) {
+        m_devices[existingIdx].host = service.host;
+        m_devices[existingIdx].port = port;
+    } else {
+        m_devices.append({service.name, service.host, port, false});
+    }
+    rebuildSidebar();
     if (service.port != port) {
         LogManager::instance().log(QString("Discovered receiver: %1 at %2 (mDNS reported port %3, using standard port %4)")
                                        .arg(service.name, service.host).arg(service.port).arg(port));

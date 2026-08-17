@@ -128,13 +128,30 @@ private slots:
     void onCreateVirtualDisplay();
     void onRemoveVirtualDisplay();
     void onExtendDisplays();
+    void onDeviceRowSelected(const QString& deviceName);
     void onRefreshMonitors();
     void onMonitorSelected(int index);
 #endif
 
 private:
+    // A receiver we have discovered or connected to. The macOS sidebar lists
+    // devices rather than fixed pages, so the Windows sidebar needs the same
+    // model to be rebuilt as devices come and go.
+    struct DeviceEntry {
+        QString name;
+        QString host;
+        uint16_t port = 51820;
+        bool connected = false;
+    };
+    QVector<DeviceEntry> m_devices;
+    QString m_selectedDeviceName;   // empty when a fixed page is selected
+
     void setupUi();
     void setupSidebar();
+    void rebuildSidebar();          // re-run whenever the device list changes
+    void setupDevicePage();
+    void populateDevicePage(const DeviceEntry& device);
+    int  indexOfDevice(const QString& name) const;
     void setupOverviewPage();
     void setupReceivePage();
     void setupSettingsPage();
@@ -172,6 +189,12 @@ private:
     int m_pageReceive = -1;
     int m_pageSettings = -1;
     int m_pageLogs = -1;
+    int m_pageDevice = -1;   // per-device detail, repopulated on selection
+
+    // Per-device detail page widgets
+    QWidget* m_devicePageBody = nullptr;
+    QLabel* m_deviceTitleLabel = nullptr;
+    QLabel* m_deviceSubtitleLabel = nullptr;
 
     // Overview page
     QLabel* m_overviewStatusLabel = nullptr;
