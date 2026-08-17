@@ -13,13 +13,18 @@
 #ifdef ENABLE_SENDER
 #include "sender/SenderController.h"
 #include "sender/VirtualDisplayVDD.h"
+#endif
+
+// Sidebar chrome, theming and the rounded logo are part of the shared UI, not
+// sender mode. These sat inside the ENABLE_SENDER guard above purely because
+// they were added next to the sender includes, which broke the Linux receiver
+// build for several commits — Windows CI passes ENABLE_SENDER=ON and never
+// noticed. Keep them out here.
 #include "Icons.h"
 #include "Theme.h"
-#include <QDesktopServices>
 #include <QPainter>
 #include <QPainterPath>
 #include <QStyleHints>
-#endif
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
