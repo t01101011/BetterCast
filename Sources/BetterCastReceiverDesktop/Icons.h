@@ -21,6 +21,7 @@
 #include <QFontDatabase>
 #include <QIcon>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QColor>
 
@@ -100,6 +101,53 @@ inline QString info()       { return glyph(0xE946); } // Info
 inline QString power()      { return glyph(0xE7E8); } // PowerButton
 inline QString heart()      { return glyph(0xEB51); } // HeartFill
 inline QString arrange()    { return glyph(0xE80A); } // Move
+
+// Mask a square logo to rounded corners.
+//
+// macOS masks app icons to a superellipse, so a square logo looks foreign
+// beside one. Qt has no squircle primitive, but a generous corner radius reads
+// the same at icon sizes. Rendered at `dpr` times the requested size and
+// downsampled, which keeps the curve smooth even at 16px.
+inline QPixmap rounded(const QPixmap& src, int size, qreal dpr = 2.0) {
+    if (src.isNull() || size <= 0) return src;
+
+    const int px = static_cast<int>(size * dpr);
+    const qreal radius = px * 0.22;   // ~22% of the edge approximates the macOS mask
+
+    QPixmap scaled = src.scaled(px, px, Qt::KeepAspectRatioByExpanding,
+                                Qt::SmoothTransformation);
+    QPixmap out(px, px);
+    out.fill(Qt::transparent);
+
+    QPainter painter(&out);
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    QPainterPath clip;
+    clip.addRoundedRect(0, 0, px, px, radius, radius);
+    painter.setClipPath(clip);
+    // Centre the expanded image so a non-square source is cropped, not squashed.
+    painter.drawPixmap((px - scaled.width()) / 2, (px - scaled.height()) / 2, scaled);
+    painter.end();
+
+    if (dpr != 1.0) out.setDevicePixelRatio(dpr);
+    return out;
+}
+
+// The application icon, rounded at every size Windows asks for.
+//
+// setWindowIcon drives the title bar, the taskbar button and Alt-Tab, and it
+// used to be handed the raw square PNG — so rounding the in-app logo and the
+// generated .ico still left those three square. Supplying real pixmaps per size
+// beats letting Qt rescale one, which softens the corners at 16px.
+inline QIcon appIcon(const QString& resourcePath = QStringLiteral(":/appicon.png")) {
+    const QPixmap src(resourcePath);
+    if (src.isNull()) return QIcon();
+
+    QIcon icon;
+    for (int s : {16, 20, 24, 32, 40, 48, 64, 128, 256}) {
+        icon.addPixmap(rounded(src, s, 1.0));   // dpr 1: QIcon wants true pixel sizes
+    }
+    return icon;
+}
 
 // Pick a device glyph from its advertised name, mirroring the macOS
 // SidebarDeviceRow.deviceIcon logic.

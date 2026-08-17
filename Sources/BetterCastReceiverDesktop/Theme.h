@@ -13,6 +13,7 @@
 // degrades to a plain background everywhere else.
 
 #include <QColor>
+#include <QPalette>
 #include <QGuiApplication>
 #include <QString>
 #include <QStyleHints>
@@ -104,6 +105,15 @@ inline Palette activePalette() {
 }
 
 QString stylesheet(const Palette& p);
+
+// Widget palette matching the theme.
+//
+// Inline stylesheets across the UI use palette(window-text) / palette(mid)
+// instead of hard-coded colours — hard-coded white text was invisible on a
+// light background. Those resolve against the widget's QPalette, so it has to
+// be set from the theme rather than left on whatever the OS supplies, or
+// forcing Light while Windows is Dark would still paint light-on-light.
+QPalette qtPalette(const Palette& p);
 
 // Apply the Mica backdrop and match the title bar to the theme.
 // No-op below Windows 11 22621.

@@ -35,6 +35,32 @@ void setSavedMode(Mode mode) {
     s.setValue("appearance/theme", static_cast<int>(mode));
 }
 
+QPalette qtPalette(const Palette& p) {
+    QPalette q;
+    const QColor text(p.text), dim(p.textDim), window(p.window), surface(p.surface);
+
+    q.setColor(QPalette::Window, window);
+    q.setColor(QPalette::WindowText, text);
+    q.setColor(QPalette::Base, surface);
+    q.setColor(QPalette::AlternateBase, QColor(p.surfaceAlt));
+    q.setColor(QPalette::Text, text);
+    q.setColor(QPalette::Button, surface);
+    q.setColor(QPalette::ButtonText, text);
+    q.setColor(QPalette::Highlight, QColor(p.accent));
+    q.setColor(QPalette::HighlightedText, QColor("#ffffff"));
+    q.setColor(QPalette::ToolTipBase, surface);
+    q.setColor(QPalette::ToolTipText, text);
+    q.setColor(QPalette::PlaceholderText, dim);
+    // Mid is what the stylesheets use for secondary text, so it must stay
+    // readable against the window background in BOTH themes.
+    q.setColor(QPalette::Mid, dim);
+    q.setColor(QPalette::Dark, QColor(p.border));
+    q.setColor(QPalette::Disabled, QPalette::WindowText, QColor(p.textFaint));
+    q.setColor(QPalette::Disabled, QPalette::Text, QColor(p.textFaint));
+    q.setColor(QPalette::Disabled, QPalette::ButtonText, QColor(p.textFaint));
+    return q;
+}
+
 QString stylesheet(const Palette& p) {
     return QString(R"(
     QMainWindow { background-color: %WINDOW%; }

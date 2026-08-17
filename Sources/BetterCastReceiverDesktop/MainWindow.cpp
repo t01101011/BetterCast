@@ -83,33 +83,6 @@ static QGroupBox* makeCard(const QString& title) {
     return card;
 }
 
-// macOS masks app icons to a superellipse, so a square logo looks foreign beside
-// one. Qt has no squircle primitive, but a generous corner radius on a rounded
-// rect reads the same at these sizes.
-static QPixmap roundedPixmap(const QPixmap& src, int size, int radius) {
-    if (src.isNull()) return src;
-
-    const qreal dpr = 2.0;   // render at 2x so the curve stays smooth on HiDPI
-    const int px = static_cast<int>(size * dpr);
-
-    QPixmap scaled = src.scaled(px, px, Qt::KeepAspectRatioByExpanding,
-                                Qt::SmoothTransformation);
-    QPixmap out(px, px);
-    out.fill(Qt::transparent);
-
-    QPainter painter(&out);
-    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
-    QPainterPath clip;
-    clip.addRoundedRect(0, 0, px, px, radius * dpr, radius * dpr);
-    painter.setClipPath(clip);
-    // Centre the expanded image so a non-square source is cropped, not squashed.
-    painter.drawPixmap((px - scaled.width()) / 2, (px - scaled.height()) / 2, scaled);
-    painter.end();
-
-    out.setDevicePixelRatio(dpr);
-    return out;
-}
-
 // ─── Constructor ────────────────────────────────────────────────────────────────
 
 MainWindow::MainWindow(QWidget* parent)
@@ -286,6 +259,9 @@ MainWindow::~MainWindow() {
 
 void MainWindow::applyTheme() {
     const Theme::Palette p = Theme::activePalette();
+    // Palette first: the stylesheet and many inline styles reference
+    // palette(window-text) / palette(mid), so they resolve against this.
+    qApp->setPalette(Theme::qtPalette(p));
     setStyleSheet(Theme::stylesheet(p));
     Theme::applyWindowBackdrop(this, p);
 }
@@ -469,19 +445,19 @@ void MainWindow::setupOverviewPage() {
     auto* iconLabel = new QLabel();
     QPixmap appIcon(":/appicon.png");
     if (!appIcon.isNull()) {
-        iconLabel->setPixmap(roundedPixmap(appIcon, 80, 18));
+        iconLabel->setPixmap(Icons::rounded(appIcon, 80));
     }
     iconLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(iconLabel);
 
     // Title
     auto* title = new QLabel("BetterCast");
-    title->setStyleSheet("font-size: 28px; font-weight: bold; color: white;");
+    title->setStyleSheet("font-size: 28px; font-weight: bold; color: palette(window-text);");
     title->setAlignment(Qt::AlignCenter);
     layout->addWidget(title);
 
     auto* subtitle = new QLabel("Turn any device into a wireless extended display");
-    subtitle->setStyleSheet("font-size: 14px; color: #888;");
+    subtitle->setStyleSheet("font-size: 14px; color: palette(mid);");
     subtitle->setAlignment(Qt::AlignCenter);
     layout->addWidget(subtitle);
 
@@ -500,7 +476,7 @@ void MainWindow::setupOverviewPage() {
         numLabel->setFixedSize(28, 28);
         numLabel->setAlignment(Qt::AlignCenter);
         numLabel->setStyleSheet(
-            "background-color: #0078D4; color: white; font-weight: bold; "
+            "background-color: #0078D4; color: palette(window-text); font-weight: bold; "
             "font-size: 13px; border-radius: 14px;");
         row->addWidget(numLabel);
 
@@ -510,7 +486,7 @@ void MainWindow::setupOverviewPage() {
         titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #e0e0e0;");
         textLayout->addWidget(titleLabel);
         auto* descLabel = new QLabel(desc);
-        descLabel->setStyleSheet("font-size: 12px; color: #888;");
+        descLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
         descLabel->setWordWrap(true);
         textLayout->addWidget(descLabel);
         row->addLayout(textLayout, 1);
@@ -531,13 +507,13 @@ void MainWindow::setupOverviewPage() {
 
     // Status
     m_overviewStatusLabel = new QLabel("Searching for devices on your network...");
-    m_overviewStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
+    m_overviewStatusLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     m_overviewStatusLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(m_overviewStatusLabel);
 
     // Local IP
     m_overviewIpLabel = new QLabel();
-    m_overviewIpLabel->setStyleSheet("font-size: 12px; color: #666;");
+    m_overviewIpLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     m_overviewIpLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(m_overviewIpLabel);
 
@@ -561,11 +537,11 @@ void MainWindow::setupSendPage() {
     layout->setSpacing(16);
 
     auto* pageTitle = new QLabel("Send Screen");
-    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: white;");
+    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     layout->addWidget(pageTitle);
 
     auto* pageDesc = new QLabel("Stream your screen to a BetterCast receiver on another device.");
-    pageDesc->setStyleSheet("font-size: 13px; color: #888;");
+    pageDesc->setStyleSheet("font-size: 13px; color: palette(mid);");
     pageDesc->setWordWrap(true);
     layout->addWidget(pageDesc);
 
@@ -621,7 +597,7 @@ void MainWindow::setupSendPage() {
     // Resolution picker
     auto* resRow = new QHBoxLayout();
     auto* resLabel = new QLabel("Resolution:");
-    resLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    resLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     resRow->addWidget(resLabel);
 
     m_vddResolutionCombo = new QComboBox();
@@ -645,10 +621,10 @@ void MainWindow::setupSendPage() {
     m_createVddBtn = new QPushButton("Create Virtual Display");
     m_createVddBtn->setEnabled(vddInstalled);
     m_createVddBtn->setStyleSheet(
-        "QPushButton { background-color: #4caf50; color: white; font-weight: bold; "
+        "QPushButton { background-color: #4caf50; color: palette(window-text); font-weight: bold; "
         "padding: 8px 18px; border-radius: 6px; border: none; }"
         "QPushButton:hover { background-color: #66bb6a; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_createVddBtn, &QPushButton::clicked, this, &MainWindow::onCreateVirtualDisplay);
     vddBtnRow->addWidget(m_createVddBtn);
 
@@ -658,10 +634,10 @@ void MainWindow::setupSendPage() {
                                "administrator approval once.");
     m_removeVddBtn->setEnabled(false);
     m_removeVddBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 8px 18px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 8px 18px; "
         "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_removeVddBtn, &QPushButton::clicked, this, &MainWindow::onRemoveVirtualDisplay);
     vddBtnRow->addWidget(m_removeVddBtn);
 
@@ -683,10 +659,10 @@ void MainWindow::setupSendPage() {
     m_applyTopologyBtn = new QPushButton("Apply");
     m_applyTopologyBtn->setEnabled(vddInstalled);
     m_applyTopologyBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 8px 18px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 8px 18px; "
         "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_applyTopologyBtn, &QPushButton::clicked, this, &MainWindow::onExtendDisplays);
     vddBtnRow->addWidget(m_applyTopologyBtn);
 
@@ -701,7 +677,7 @@ void MainWindow::setupSendPage() {
     monLayout->setSpacing(10);
 
     auto* monDesc = new QLabel("Select which display to capture and stream:");
-    monDesc->setStyleSheet("font-size: 12px; color: #888;");
+    monDesc->setStyleSheet("font-size: 12px; color: palette(mid);");
     monLayout->addWidget(monDesc);
 
     auto* monRow = new QHBoxLayout();
@@ -713,7 +689,7 @@ void MainWindow::setupSendPage() {
 
     auto* refreshBtn = new QPushButton("Refresh");
     refreshBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 6px 14px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
         "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(refreshBtn, &QPushButton::clicked, this, &MainWindow::onRefreshMonitors);
@@ -745,7 +721,7 @@ void MainWindow::setupSendPage() {
 
     // Discovered receivers dropdown
     auto* discLabel = new QLabel("Discovered Receivers:");
-    discLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    discLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     connLayout->addWidget(discLabel);
 
     m_receiverCombo = new QComboBox();
@@ -758,13 +734,13 @@ void MainWindow::setupSendPage() {
     connLayout->addSpacing(4);
 
     auto* orLabel = new QLabel(QString::fromUtf8("\xe2\x80\x94 or enter IP manually \xe2\x80\x94"));
-    orLabel->setStyleSheet("font-size: 11px; color: #666;");
+    orLabel->setStyleSheet("font-size: 11px; color: palette(mid);");
     orLabel->setAlignment(Qt::AlignCenter);
     connLayout->addWidget(orLabel);
 
     auto* hostRow = new QHBoxLayout();
     auto* hostLabel = new QLabel("Receiver IP:");
-    hostLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    hostLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     hostRow->addWidget(hostLabel);
     m_sendHostEdit = new QLineEdit();
     m_sendHostEdit->setPlaceholderText("e.g. 192.168.1.50");
@@ -782,7 +758,7 @@ void MainWindow::setupSendPage() {
 
     auto* fpsRow = new QHBoxLayout();
     auto* fpsLabel = new QLabel("Frame Rate:");
-    fpsLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    fpsLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     fpsRow->addWidget(fpsLabel);
     m_fpsSpinBox = new QSpinBox();
     m_fpsSpinBox->setRange(15, 120);
@@ -795,7 +771,7 @@ void MainWindow::setupSendPage() {
 
     auto* brRow = new QHBoxLayout();
     auto* brLabel = new QLabel("Bitrate:");
-    brLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    brLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     brRow->addWidget(brLabel);
     m_bitrateSpinBox = new QSpinBox();
     m_bitrateSpinBox->setRange(2, 100);
@@ -814,20 +790,20 @@ void MainWindow::setupSendPage() {
 
     m_sendBtn = new QPushButton("Send Screen");
     m_sendBtn->setStyleSheet(
-        "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
+        "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
         "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_sendBtn, &QPushButton::clicked, this, &MainWindow::onSendScreenClicked);
     btnRow->addWidget(m_sendBtn);
 
     m_stopSendBtn = new QPushButton("Stop");
     m_stopSendBtn->setEnabled(false);
     m_stopSendBtn->setStyleSheet(
-        "QPushButton { background-color: #d32f2f; color: white; font-weight: bold; "
+        "QPushButton { background-color: #d32f2f; color: palette(window-text); font-weight: bold; "
         "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
         "QPushButton:hover { background-color: #e53935; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_stopSendBtn, &QPushButton::clicked, this, &MainWindow::onStopSendingClicked);
     btnRow->addWidget(m_stopSendBtn);
 
@@ -836,7 +812,7 @@ void MainWindow::setupSendPage() {
 
     // Status
     m_senderStatusLabel = new QLabel("Select a monitor and receiver to start streaming");
-    m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
+    m_senderStatusLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     m_senderStatusLabel->setWordWrap(true);
     layout->addWidget(m_senderStatusLabel);
 
@@ -859,7 +835,7 @@ void MainWindow::setupReceivePage() {
     layout->setSpacing(16);
 
     auto* pageTitle = new QLabel("Receive Screen");
-    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: white;");
+    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     layout->addWidget(pageTitle);
 
     // Listening status card (prominent, like Mac's Start Listening)
@@ -873,7 +849,7 @@ void MainWindow::setupReceivePage() {
     listenLayout->addWidget(m_recvStatusLabel);
 
     m_recvIpLabel = new QLabel();
-    m_recvIpLabel->setStyleSheet("font-size: 13px; color: #888;");
+    m_recvIpLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     m_recvIpLabel->setWordWrap(true);
     listenLayout->addWidget(m_recvIpLabel);
 
@@ -882,7 +858,7 @@ void MainWindow::setupReceivePage() {
         "  1. Open BetterCast and go to Send Screen\n"
         "  2. This device should appear automatically\n"
         "  3. Or enter this device's IP address manually");
-    instrLabel->setStyleSheet("color: #888; font-size: 12px;");
+    instrLabel->setStyleSheet("color: palette(mid); font-size: 12px;");
     instrLabel->setWordWrap(true);
     listenLayout->addWidget(instrLabel);
 
@@ -894,7 +870,7 @@ void MainWindow::setupReceivePage() {
     manualLayout->setSpacing(10);
 
     auto* manualDesc = new QLabel("Connect to a sender that isn't auto-discovered:");
-    manualDesc->setStyleSheet("font-size: 12px; color: #888;");
+    manualDesc->setStyleSheet("font-size: 12px; color: palette(mid);");
     manualLayout->addWidget(manualDesc);
 
     auto* connRow = new QHBoxLayout();
@@ -912,10 +888,10 @@ void MainWindow::setupReceivePage() {
 
     m_connectBtn = new QPushButton("Connect");
     m_connectBtn->setStyleSheet(
-        "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
+        "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
         "padding: 8px 20px; border-radius: 6px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
     connRow->addWidget(m_connectBtn);
 
@@ -934,7 +910,7 @@ void MainWindow::setupReceivePage() {
         "QPushButton { background-color: #3ddc84; color: black; font-weight: bold; "
         "padding: 10px 20px; border-radius: 8px; font-size: 14px; border: none; }"
         "QPushButton:hover { background-color: #50e898; }"
-        "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_adbBtn, &QPushButton::clicked, this, &MainWindow::onAdbConnectClicked);
     adbLayout->addWidget(m_adbBtn);
 
@@ -945,7 +921,7 @@ void MainWindow::setupReceivePage() {
         "3. Connect Android to this computer via USB\n"
         "4. Open BetterCast on Android and tap \"Start Casting\"\n"
         "5. Click the button above to connect");
-    m_adbHelpLabel->setStyleSheet("color: #666; font-size: 11px;");
+    m_adbHelpLabel->setStyleSheet("color: palette(mid); font-size: 11px;");
     m_adbHelpLabel->setWordWrap(true);
     adbLayout->addWidget(m_adbHelpLabel);
 
@@ -1018,7 +994,7 @@ void MainWindow::setupSettingsPage() {
     auto* descLabel = new QLabel(
         "Turn any device into a wireless extended display. "
         "Works with iPad, Android, Windows, Linux, and Mac receivers.");
-    descLabel->setStyleSheet("font-size: 12px; color: #888;");
+    descLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     descLabel->setWordWrap(true);
     aboutLayout->addWidget(descLabel);
 
@@ -1030,7 +1006,7 @@ void MainWindow::setupSettingsPage() {
     connLayout->setSpacing(10);
 
     auto* portInfo = new QLabel("Listening on port 51820 (TCP)");
-    portInfo->setStyleSheet("font-size: 13px; color: #ccc;");
+    portInfo->setStyleSheet("font-size: 13px; color: palette(mid);");
     connLayout->addWidget(portInfo);
 
     auto* ipInfo = new QLabel();
@@ -1048,7 +1024,7 @@ void MainWindow::setupSettingsPage() {
     }
     ipInfo->setText(ips.isEmpty() ? "No network detected"
                                   : "Local IPs: " + ips.join(", "));
-    ipInfo->setStyleSheet("font-size: 12px; color: #888;");
+    ipInfo->setStyleSheet("font-size: 12px; color: palette(mid);");
     ipInfo->setWordWrap(true);
     connLayout->addWidget(ipInfo);
 
@@ -1082,12 +1058,12 @@ void MainWindow::setupSettingsPage() {
 
     for (const auto& entry : changelog) {
         auto* verLabel = new QLabel(QString("%1  —  %2").arg(entry.version, entry.date));
-        verLabel->setStyleSheet("font-size: 13px; font-weight: bold; color: #ccc;");
+        verLabel->setStyleSheet("font-size: 13px; font-weight: bold; color: palette(mid);");
         changeLayout->addWidget(verLabel);
 
         for (const auto& item : entry.items) {
             auto* bulletLabel = new QLabel(QString("  \xE2\x80\xA2  %1").arg(item));
-            bulletLabel->setStyleSheet("font-size: 11px; color: #888;");
+            bulletLabel->setStyleSheet("font-size: 11px; color: palette(mid);");
             changeLayout->addWidget(bulletLabel);
         }
 
@@ -1113,14 +1089,14 @@ void MainWindow::setupLogsPage() {
     auto* titleRow = new QHBoxLayout();
 
     auto* pageTitle = new QLabel("Logs");
-    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: white;");
+    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     titleRow->addWidget(pageTitle);
 
     titleRow->addStretch();
 
     auto* reportBtn = new QPushButton("Report Issue");
     reportBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 6px 14px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
         "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(reportBtn, &QPushButton::clicked, this, &MainWindow::onReportIssue);
@@ -1128,7 +1104,7 @@ void MainWindow::setupLogsPage() {
 
     auto* copyBtn = new QPushButton("Copy");
     copyBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 6px 14px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
         "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(copyBtn, &QPushButton::clicked, this, &MainWindow::onCopyLogs);
@@ -1136,7 +1112,7 @@ void MainWindow::setupLogsPage() {
 
     auto* clearBtn = new QPushButton("Clear");
     clearBtn->setStyleSheet(
-        "QPushButton { background-color: #333; color: #ccc; padding: 6px 14px; "
+        "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
         "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearLogs);
@@ -1441,7 +1417,7 @@ void MainWindow::onRemoveVirtualDisplay() {
         QMetaObject::invokeMethod(this, [this, ok]() {
             if (ok) {
                 m_vddStatusLabel->setText("Virtual display removed");
-                m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
+                m_vddStatusLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
                 LogManager::instance().log("Virtual display removed");
             } else {
                 m_removeVddBtn->setEnabled(true);
@@ -1468,11 +1444,11 @@ void MainWindow::setupDevicePage() {
     layout->setSpacing(16);
 
     m_deviceTitleLabel = new QLabel();
-    m_deviceTitleLabel->setStyleSheet("font-size: 22px; font-weight: 600; color: white;");
+    m_deviceTitleLabel->setStyleSheet("font-size: 22px; font-weight: 600; color: palette(window-text);");
     layout->addWidget(m_deviceTitleLabel);
 
     m_deviceSubtitleLabel = new QLabel();
-    m_deviceSubtitleLabel->setStyleSheet("font-size: 13px; color: #888;");
+    m_deviceSubtitleLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     layout->addWidget(m_deviceSubtitleLabel);
 
     // Body is rebuilt per device; keep it in its own container so repopulating
@@ -1497,7 +1473,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
             .arg(device.connected ? "Connected" : "Available"));
     m_deviceSubtitleLabel->setStyleSheet(
         device.connected ? "font-size: 13px; color: #4caf50;"
-                         : "font-size: 13px; color: #888;");
+                         : "font-size: 13px; color: palette(mid);");
 
     // Clear the previous device's body.
     QLayout* bodyLayout = m_devicePageBody->layout();
@@ -1514,7 +1490,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         "Streams the monitor selected on the Send Screen page. Pick a "
         "[Virtual] display there to extend your desktop rather than mirror it.");
     hint->setWordWrap(true);
-    hint->setStyleSheet("font-size: 12px; color: #999;");
+    hint->setStyleSheet("font-size: 12px; color: palette(mid);");
     cardLayout->addWidget(hint);
 
     auto* btnRow = new QHBoxLayout();
@@ -1529,7 +1505,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
 
         auto* stopBtn = new QPushButton("Stop Streaming Here");
         stopBtn->setStyleSheet(
-            "QPushButton { background-color: #d32f2f; color: white; font-weight: bold; "
+            "QPushButton { background-color: #d32f2f; color: palette(window-text); font-weight: bold; "
             "padding: 9px 20px; border-radius: 6px; border: none; }"
             "QPushButton:hover { background-color: #e34a4a; }");
         connect(stopBtn, &QPushButton::clicked, this, [this, device]() {
@@ -1541,7 +1517,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         auto* sendBtn = new QPushButton("Send Screen Here");
         sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
         sendBtn->setStyleSheet(
-            "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
+            "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
             "padding: 9px 20px; border-radius: 6px; border: none; }"
             "QPushButton:hover { background-color: #1a88e0; }");
         connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
@@ -1581,7 +1557,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
 
     auto* fpsRow = new QHBoxLayout();
     auto* fpsLabel = new QLabel("Frame Rate:");
-    fpsLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    fpsLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     fpsRow->addWidget(fpsLabel);
     auto* fpsSpin = new QSpinBox();
     fpsSpin->setRange(15, 120);
@@ -1594,7 +1570,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
 
     auto* brRow = new QHBoxLayout();
     auto* brLabel = new QLabel("Bitrate:");
-    brLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    brLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
     brRow->addWidget(brLabel);
     auto* brSpin = new QSpinBox();
     brSpin->setRange(2, 100);
@@ -1625,7 +1601,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         auto* note = new QLabel("Changes take effect the next time you start "
                                 "streaming to this device.");
         note->setWordWrap(true);
-        note->setStyleSheet("font-size: 11px; color: #888;");
+        note->setStyleSheet("font-size: 11px; color: palette(mid);");
         qLayout->addWidget(note);
     }
 
@@ -1642,7 +1618,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
                 "this PC in BetterCast on %1 to extend its desktop here.")
             .arg(device.name));
     recvHint->setWordWrap(true);
-    recvHint->setStyleSheet("font-size: 12px; color: #999;");
+    recvHint->setStyleSheet("font-size: 12px; color: palette(mid);");
     recvLayout->addWidget(recvHint);
 
     auto* recvRow = new QHBoxLayout();
@@ -1791,7 +1767,7 @@ void MainWindow::onMonitorSelected(int index) {
 void MainWindow::onStopSendingClicked() {
     m_sender->stopAll();
     m_senderStatusLabel->setText("Sender stopped");
-    m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
+    m_senderStatusLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     m_fpsSpinBox->setEnabled(true);
     m_bitrateSpinBox->setEnabled(true);
     LogManager::instance().log("Sender stopped");

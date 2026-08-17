@@ -932,6 +932,76 @@ void VirtualDisplayVDD::restorePrimaryMode() {
 #endif
 }
 
+// Raise a virtual display to the preferred resolution.
+//
+// Done as its own call, using a mode the driver actually advertises. Bundling
+// the resolution into the positioning DEVMODE meant it inherited that call's
+// DISP_CHANGE_FAILED, so streams stayed at the VDD's 800x600 default. And a
+// synthesised 1920x1080@60 is the usual reason a mode change is refused —
+// EnumDisplaySettings lists what the driver will actually accept, so pick from
+// there instead of inventing one.
+bool VirtualDisplayVDD::setVirtualDisplayResolution(const QString& deviceName,
+                                                    int width, int height) {
+#ifdef _WIN32
+    if (deviceName.isEmpty() || width <= 0 || height <= 0) return false;
+    const std::wstring wname = deviceName.toStdWString();
+
+    DEVMODEW current = {};
+    current.dmSize = sizeof(current);
+    if (EnumDisplaySettingsW(wname.c_str(), ENUM_CURRENT_SETTINGS, &current) &&
+        static_cast<int>(current.dmPelsWidth) == width &&
+        static_cast<int>(current.dmPelsHeight) == height) {
+        return true;   // already there
+    }
+
+    // Find the advertised mode closest to what we want: exact size, highest
+    // refresh rate, 32bpp.
+    DEVMODEW best = {};
+    bool found = false;
+    DEVMODEW probe = {};
+    probe.dmSize = sizeof(probe);
+    for (DWORD i = 0; EnumDisplaySettingsW(wname.c_str(), i, &probe); i++) {
+        if (static_cast<int>(probe.dmPelsWidth) == width &&
+            static_cast<int>(probe.dmPelsHeight) == height &&
+            probe.dmBitsPerPel == 32) {
+            if (!found || probe.dmDisplayFrequency > best.dmDisplayFrequency) {
+                best = probe;
+                found = true;
+            }
+        }
+        probe = {};
+        probe.dmSize = sizeof(probe);
+    }
+
+    if (!found) {
+        VDD_LOG(QString("VDD: %1 does not advertise %2x%3 — leaving it at %4x%5")
+                    .arg(deviceName).arg(width).arg(height)
+                    .arg(current.dmPelsWidth).arg(current.dmPelsHeight));
+        return false;
+    }
+
+    // Keep the position; only the size changes.
+    best.dmPosition = current.dmPosition;
+    best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL |
+                    DM_DISPLAYFREQUENCY | DM_POSITION;
+
+    LONG r = ChangeDisplaySettingsExW(wname.c_str(), &best, nullptr,
+                                      CDS_UPDATEREGISTRY, nullptr);
+    if (r != DISP_CHANGE_SUCCESSFUL) {
+        VDD_LOG(QString("VDD: Could not set %1 to %2x%3 — %4")
+                    .arg(deviceName).arg(width).arg(height).arg(dispChangeName(r)));
+        return false;
+    }
+
+    VDD_LOG(QString("VDD: %1 set to %2x%3 @ %4Hz")
+                .arg(deviceName).arg(width).arg(height).arg(best.dmDisplayFrequency));
+    return true;
+#else
+    Q_UNUSED(deviceName); Q_UNUSED(width); Q_UNUSED(height);
+    return false;
+#endif
+}
+
 bool VirtualDisplayVDD::positionVirtualDisplay() {
 #ifdef _WIN32
     // Find the primary so we can park the virtual display just past its right edge.
@@ -1005,19 +1075,6 @@ bool VirtualDisplayVDD::positionVirtualDisplay() {
         // Carry a resolution alongside the position: some indirect display
         // drivers reject a position-only DEVMODE.
         //
-        // Also raise the resolution if Windows brought the display up at the
-        // driver's default. An extended VDD monitor appears at 800x600, and
-        // nothing else sets it higher — so the stream went out at 800x600 while
-        // the picker still showed the stale 1920x1080 from the registry.
-        if (static_cast<int>(dm.dmPelsWidth) < m_preferredWidth ||
-            static_cast<int>(dm.dmPelsHeight) < m_preferredHeight) {
-            VDD_LOG(QString("VDD: %1 came up at %2x%3, raising to %4x%5")
-                        .arg(vm.name).arg(dm.dmPelsWidth).arg(dm.dmPelsHeight)
-                        .arg(m_preferredWidth).arg(m_preferredHeight));
-            dm.dmPelsWidth = static_cast<DWORD>(m_preferredWidth);
-            dm.dmPelsHeight = static_cast<DWORD>(m_preferredHeight);
-            cursorX = targetX + m_preferredWidth;   // layout follows the new width
-        }
         dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
         dm.dmPosition.x = targetX;
         dm.dmPosition.y = 0;

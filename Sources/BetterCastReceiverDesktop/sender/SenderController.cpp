@@ -181,6 +181,10 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
         }
     }
 
+    // Windows brings an extended virtual display up at the driver's 800x600
+    // default. Raise it before capture starts, or the stream goes out at 800x600.
+    if (m_vdd) m_vdd->setVirtualDisplayResolution(s->displayName, 1920, 1080);
+
     LogManager::instance().log(
         QString("Sender: Streaming %1 to %2 (session %3 of %4)")
             .arg(s->displayName, receiverHost)

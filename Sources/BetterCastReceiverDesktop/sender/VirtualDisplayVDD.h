@@ -102,6 +102,9 @@ public:
         if (width > 0 && height > 0) { m_preferredWidth = width; m_preferredHeight = height; }
     }
 
+    // Raise a virtual display to a resolution the driver advertises.
+    bool setVirtualDisplayResolution(const QString& deviceName, int width, int height);
+
     // Display topology
     TopologyState queryTopology() const;
 

@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QSurfaceFormat>
 #include <QIcon>
+#include "Icons.h"
 #include <QProcess>
 #include <QStandardPaths>
 #include <QFile>
@@ -77,7 +78,10 @@ int main(int argc, char* argv[]) {
     app.setApplicationName("BetterCast");
     app.setOrganizationName("BetterCast");
     app.setApplicationVersion("1.0.0");
-    app.setWindowIcon(QIcon(":/appicon.png"));
+    // Rounded to match the macOS icon. This drives the title bar, the taskbar
+    // button and Alt-Tab; handing it the raw square PNG left all three square
+    // even after the in-app logo and the generated .ico were rounded.
+    app.setWindowIcon(Icons::appIcon());
 
 #ifdef _WIN32
     ensureFirewallRule();
