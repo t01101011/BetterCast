@@ -310,7 +310,7 @@ void MainWindow::setupUi() {
     });
     footerLayout->addWidget(donateBtn);
 
-    auto* madeWith = new QLabel(QString::fromUtf8("Made with \xE2\x99\xA5 \xE2\x80\xA2 open source"));
+    auto* madeWith = new QLabel(QString::fromUtf8("Made with \xE2\x99\xA5 by Stephen Lovino"));
     madeWith->setAlignment(Qt::AlignCenter);
     madeWith->setStyleSheet("font-size: 11px; color: palette(mid);");
     footerLayout->addWidget(madeWith);
@@ -439,7 +439,7 @@ void MainWindow::setupOverviewPage() {
     auto* layout = new QVBoxLayout(page);
     layout->setAlignment(Qt::AlignCenter);
     layout->setContentsMargins(40, 40, 40, 40);
-    layout->setSpacing(12);
+    layout->setSpacing(14);
 
     // App icon
     auto* iconLabel = new QLabel();
@@ -476,14 +476,14 @@ void MainWindow::setupOverviewPage() {
         numLabel->setFixedSize(28, 28);
         numLabel->setAlignment(Qt::AlignCenter);
         numLabel->setStyleSheet(
-            "background-color: #0078D4; color: palette(window-text); font-weight: bold; "
+            "background-color: #0078D4; color: #ffffff; font-weight: bold; "
             "font-size: 13px; border-radius: 14px;");
         row->addWidget(numLabel);
 
         auto* textLayout = new QVBoxLayout();
         textLayout->setSpacing(2);
         auto* titleLabel = new QLabel(title);
-        titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #e0e0e0;");
+        titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: palette(window-text);");
         textLayout->addWidget(titleLabel);
         auto* descLabel = new QLabel(desc);
         descLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
@@ -621,7 +621,7 @@ void MainWindow::setupSendPage() {
     m_createVddBtn = new QPushButton("Create Virtual Display");
     m_createVddBtn->setEnabled(vddInstalled);
     m_createVddBtn->setStyleSheet(
-        "QPushButton { background-color: #4caf50; color: palette(window-text); font-weight: bold; "
+        "QPushButton { background-color: #4caf50; color: #ffffff; font-weight: bold; "
         "padding: 8px 18px; border-radius: 6px; border: none; }"
         "QPushButton:hover { background-color: #66bb6a; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
@@ -790,7 +790,7 @@ void MainWindow::setupSendPage() {
 
     m_sendBtn = new QPushButton("Send Screen");
     m_sendBtn->setStyleSheet(
-        "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
+        "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
         "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
@@ -800,7 +800,7 @@ void MainWindow::setupSendPage() {
     m_stopSendBtn = new QPushButton("Stop");
     m_stopSendBtn->setEnabled(false);
     m_stopSendBtn->setStyleSheet(
-        "QPushButton { background-color: #d32f2f; color: palette(window-text); font-weight: bold; "
+        "QPushButton { background-color: #d32f2f; color: #ffffff; font-weight: bold; "
         "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
         "QPushButton:hover { background-color: #e53935; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
@@ -888,7 +888,7 @@ void MainWindow::setupReceivePage() {
 
     m_connectBtn = new QPushButton("Connect");
     m_connectBtn->setStyleSheet(
-        "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
+        "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
         "padding: 8px 20px; border-radius: 6px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
@@ -988,7 +988,7 @@ void MainWindow::setupSettingsPage() {
 
     m_versionLabel = new QLabel(QString("BetterCast v%1")
         .arg(QApplication::applicationVersion()));
-    m_versionLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #e0e0e0;");
+    m_versionLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: palette(window-text);");
     aboutLayout->addWidget(m_versionLabel);
 
     auto* descLabel = new QLabel(
@@ -1505,7 +1505,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
 
         auto* stopBtn = new QPushButton("Stop Streaming Here");
         stopBtn->setStyleSheet(
-            "QPushButton { background-color: #d32f2f; color: palette(window-text); font-weight: bold; "
+            "QPushButton { background-color: #d32f2f; color: #ffffff; font-weight: bold; "
             "padding: 9px 20px; border-radius: 6px; border: none; }"
             "QPushButton:hover { background-color: #e34a4a; }");
         connect(stopBtn, &QPushButton::clicked, this, [this, device]() {
@@ -1517,7 +1517,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         auto* sendBtn = new QPushButton("Send Screen Here");
         sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
         sendBtn->setStyleSheet(
-            "QPushButton { background-color: #0078D4; color: palette(window-text); font-weight: bold; "
+            "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
             "padding: 9px 20px; border-radius: 6px; border: none; }"
             "QPushButton:hover { background-color: #1a88e0; }");
         connect(sendBtn, &QPushButton::clicked, this, [this, device]() {

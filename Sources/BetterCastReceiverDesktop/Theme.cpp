@@ -121,8 +121,8 @@ QString stylesheet(const Palette& p) {
         color: %TEXT_DIM%;
         border: 1px solid %BORDER%;
         border-radius: 10px;
-        margin-top: 16px;
-        padding: 20px 16px 12px 16px;
+        margin-top: 20px;
+        padding: 26px 18px 16px 18px;
         font-size: 12px;
         font-weight: bold;
         background-color: %SURFACE_GLASS%;
