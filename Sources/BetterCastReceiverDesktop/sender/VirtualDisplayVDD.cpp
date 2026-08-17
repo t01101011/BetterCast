@@ -1577,8 +1577,15 @@ QVector<VirtualDisplayVDD::VddDevice> VirtualDisplayVDD::enumerateVddDevices() c
             name = QString::fromWCharArray(friendly);
         }
 
-        if (looksVirtual(id) || looksVirtual(name)) {
-            devices.append({id, name});
+        // A root-enumerated display device IS a virtual one — real GPUs sit on
+        // PCI. Matching only on the name was wrong: freshly created nodes
+        // enumerate as ROOT\DISPLAY\000N and their friendly name is not
+        // populated straight away, so a successful devcon install was counted
+        // as "0 nodes added" and reported as a failure. Repeated attempts then
+        // created ten nodes while telling the user nothing had worked.
+        if (id.startsWith("ROOT\\DISPLAY", Qt::CaseInsensitive) ||
+            looksVirtual(id) || looksVirtual(name)) {
+            devices.append({id, name.isEmpty() ? QStringLiteral("Virtual Display Driver") : name});
         }
         devData = {};
         devData.cbSize = sizeof(devData);
