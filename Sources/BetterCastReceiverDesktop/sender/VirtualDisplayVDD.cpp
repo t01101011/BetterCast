@@ -131,6 +131,22 @@ QString displayDeviceStrings(const QString& deviceName) {
     return combined;
 }
 
+// ChangeDisplaySettingsEx returns bare negative numbers; naming them turns an
+// unhelpful "code -1" log line into something diagnosable.
+QString dispChangeName(LONG code) {
+    switch (code) {
+        case  0: return "SUCCESSFUL";
+        case  1: return "RESTART required";
+        case -1: return "FAILED";
+        case -2: return "BADMODE";
+        case -3: return "NOTUPDATED";
+        case -4: return "BADFLAGS";
+        case -5: return "BADPARAM";
+        case -6: return "BADDUALVIEW";
+        default: return QString::number(code);
+    }
+}
+
 QString sourceKey(const DISPLAYCONFIG_PATH_INFO& p) {
     return QString("%1:%2:%3").arg(p.sourceInfo.adapterId.HighPart)
                               .arg(p.sourceInfo.adapterId.LowPart)
@@ -786,46 +802,96 @@ bool VirtualDisplayVDD::positionVirtualDisplay() {
         scan.cb = sizeof(scan);
     }
 
-    bool moved = false;
+    // Collect the attached virtual displays first, then lay them out in one pass.
+    //
+    // The previous version advanced the layout cursor only when a move
+    // succeeded, and skipped displays already in place without advancing at
+    // all — so with several virtual displays every one of them targeted the
+    // same x, overlapped, and Windows rejected the lot. A real four-display
+    // machine logged three consecutive "code -1" failures for exactly this.
+    struct VirtualMon { QString name; DEVMODEW mode; };
+    QVector<VirtualMon> virtuals;
+
     DISPLAY_DEVICEW dd = {};
     dd.cb = sizeof(dd);
     for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
-        const QString devName = QString::fromWCharArray(dd.DeviceName);
-        const bool isVirtual = looksVirtual(QString::fromWCharArray(dd.DeviceString));
-
-        if (isVirtual && (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) {
+        if ((dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) &&
+            looksVirtual(QString::fromWCharArray(dd.DeviceString))) {
             DEVMODEW dm = {};
             dm.dmSize = sizeof(dm);
-            if (!EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
-                dd = {}; dd.cb = sizeof(dd);
-                continue;
-            }
-
-            if (dm.dmPosition.x == rightEdge && dm.dmPosition.y == 0) {
-                VDD_LOG("VDD: " + devName + " already positioned beside the primary");
-                dd = {}; dd.cb = sizeof(dd);
-                continue;
-            }
-
-            dm.dmFields = DM_POSITION;
-            dm.dmPosition.x = rightEdge;
-            dm.dmPosition.y = 0;
-
-            LONG ret = ChangeDisplaySettingsExW(dd.DeviceName, &dm, nullptr,
-                                                CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-            if (ret == DISP_CHANGE_SUCCESSFUL) {
-                moved = true;
-                rightEdge += static_cast<LONG>(dm.dmPelsWidth);  // stack extra VDDs sideways
-                VDD_LOG(QString("VDD: Positioned %1 at %2,0").arg(devName).arg(dm.dmPosition.x));
-            } else {
-                VDD_LOG(QString("VDD: Could not position %1 (code %2)").arg(devName).arg(ret));
+            if (EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+                virtuals.append({QString::fromWCharArray(dd.DeviceName), dm});
             }
         }
         dd = {};
         dd.cb = sizeof(dd);
     }
+    if (virtuals.isEmpty()) return false;
 
-    if (moved) ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);  // commit
+    bool moved = false;
+    bool anyFailed = false;
+    LONG cursorX = rightEdge;
+
+    for (auto& vm : virtuals) {
+        const LONG targetX = cursorX;
+        // Advance unconditionally — the slot is spoken for whether or not the
+        // move lands, otherwise the next display collides with this one.
+        cursorX += static_cast<LONG>(vm.mode.dmPelsWidth);
+
+        if (vm.mode.dmPosition.x == targetX && vm.mode.dmPosition.y == 0) {
+            VDD_LOG(QString("VDD: %1 already at %2,0").arg(vm.name).arg(targetX));
+            continue;
+        }
+
+        DEVMODEW dm = vm.mode;
+        // Carry the current resolution alongside the position. Some indirect
+        // display drivers reject a position-only DEVMODE.
+        dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        dm.dmPosition.x = targetX;
+        dm.dmPosition.y = 0;
+
+        LONG ret = ChangeDisplaySettingsExW(
+            reinterpret_cast<LPCWSTR>(vm.name.utf16()), &dm, nullptr,
+            CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+
+        if (ret != DISP_CHANGE_SUCCESSFUL) {
+            // Retry with position alone, for drivers that dislike being told a
+            // resolution they consider read-only.
+            DEVMODEW posOnly = vm.mode;
+            posOnly.dmFields = DM_POSITION;
+            posOnly.dmPosition.x = targetX;
+            posOnly.dmPosition.y = 0;
+            ret = ChangeDisplaySettingsExW(
+                reinterpret_cast<LPCWSTR>(vm.name.utf16()), &posOnly, nullptr,
+                CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        }
+
+        if (ret == DISP_CHANGE_SUCCESSFUL) {
+            moved = true;
+            VDD_LOG(QString("VDD: Positioned %1 at %2,0 (%3x%4)")
+                        .arg(vm.name).arg(targetX)
+                        .arg(vm.mode.dmPelsWidth).arg(vm.mode.dmPelsHeight));
+        } else {
+            anyFailed = true;
+            VDD_LOG(QString("VDD: Could not position %1 at %2,0 — %3")
+                        .arg(vm.name).arg(targetX).arg(dispChangeName(ret)));
+        }
+    }
+
+    // Commit every CDS_NORESET change at once.
+    if (moved) {
+        LONG commit = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+        if (commit != DISP_CHANGE_SUCCESSFUL) {
+            VDD_LOG("VDD: Layout commit returned " + dispChangeName(commit));
+            return false;
+        }
+        VDD_LOG(QString("VDD: Laid out %1 virtual display(s) from x=%2 to x=%3")
+                    .arg(virtuals.size()).arg(rightEdge).arg(cursorX));
+    }
+    if (anyFailed) {
+        VDD_LOG("VDD: Some virtual displays could not be repositioned — "
+                "they may overlap in Display Settings");
+    }
     return moved;
 #else
     return false;
