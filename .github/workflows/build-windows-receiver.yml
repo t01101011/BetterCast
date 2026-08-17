@@ -78,11 +78,25 @@ jobs:
         shell: pwsh
         run: |
           pip install Pillow
+          # Round the corners before generating the .ico. The in-app logo is
+          # masked at draw time, but the taskbar, desktop shortcut and Alt-Tab
+          # all come from this file — so without it the icon stayed square
+          # everywhere outside the app window. Radius is ~22% of the edge, which
+          # approximates the macOS superellipse closely enough at icon sizes.
           python -c "
-          from PIL import Image
-          img = Image.open('Sources/BetterCastReceiverDesktop/icon_256x256.png')
-          img.save('Sources/BetterCastReceiverDesktop/appicon.ico',
+          from PIL import Image, ImageDraw
+          src = Image.open('Sources/BetterCastReceiverDesktop/icon_256x256.png').convert('RGBA')
+          size = max(src.size)
+          src = src.resize((size, size), Image.LANCZOS)
+          mask = Image.new('L', (size * 4, size * 4), 0)
+          ImageDraw.Draw(mask).rounded_rectangle(
+              [0, 0, size * 4 - 1, size * 4 - 1], radius=int(size * 4 * 0.22), fill=255)
+          mask = mask.resize((size, size), Image.LANCZOS)  # supersampled = smooth edge
+          out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+          out.paste(src, (0, 0), mask)
+          out.save('Sources/BetterCastReceiverDesktop/appicon.ico',
                    sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          print('rounded appicon.ico written from', size, 'px source')
           "
 
       - name: Configure CMake

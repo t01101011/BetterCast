@@ -18,7 +18,22 @@
 #endif
 #endif
 
+#include <QSettings>
+
 namespace Theme {
+
+// Persisted so the choice survives a restart. Defaults to System.
+Mode savedMode() {
+    QSettings s("BetterCast", "BetterCast");
+    const int v = s.value("appearance/theme", static_cast<int>(Mode::System)).toInt();
+    if (v < 0 || v > static_cast<int>(Mode::Dark)) return Mode::System;
+    return static_cast<Mode>(v);
+}
+
+void setSavedMode(Mode mode) {
+    QSettings s("BetterCast", "BetterCast");
+    s.setValue("appearance/theme", static_cast<int>(mode));
+}
 
 QString stylesheet(const Palette& p) {
     return QString(R"(

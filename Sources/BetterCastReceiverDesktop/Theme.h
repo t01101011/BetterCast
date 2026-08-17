@@ -78,6 +78,12 @@ inline Palette lightPalette() {
     return p;
 }
 
+// User's choice. Order matches the Settings combo box.
+enum class Mode { System = 0, Light = 1, Dark = 2 };
+
+Mode savedMode();
+void setSavedMode(Mode mode);
+
 // True when the OS is set to a dark app theme. Qt 6.5+ reports this and emits
 // colorSchemeChanged when the user flips it, so the app can follow live.
 inline bool systemPrefersDark() {
@@ -87,7 +93,13 @@ inline bool systemPrefersDark() {
     return true;
 }
 
-inline Palette systemPalette() {
+// The palette to draw with, honouring an explicit override before the OS.
+inline Palette activePalette() {
+    switch (savedMode()) {
+        case Mode::Light: return lightPalette();
+        case Mode::Dark:  return darkPalette();
+        case Mode::System: break;
+    }
     return systemPrefersDark() ? darkPalette() : lightPalette();
 }
 

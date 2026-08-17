@@ -219,6 +219,7 @@ private:
 
     // Settings page
     QLabel* m_versionLabel = nullptr;
+    QComboBox* m_themeCombo = nullptr;   // Follow system / Light / Dark
 
     // Logs page
     QTextEdit* m_logViewer = nullptr;

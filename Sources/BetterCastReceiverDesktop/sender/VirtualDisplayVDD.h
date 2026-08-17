@@ -95,6 +95,13 @@ public:
     bool attachVirtualDisplay(const QString& deviceName,
                               int width = 1920, int height = 1080, int refreshRate = 60);
 
+    // Resolution virtual displays should run at. Windows brings an extended VDD
+    // monitor up at the driver default of 800x600, so without this the stream
+    // goes out at 800x600 regardless of what was requested.
+    void setPreferredResolution(int width, int height) {
+        if (width > 0 && height > 0) { m_preferredWidth = width; m_preferredHeight = height; }
+    }
+
     // Display topology
     TopologyState queryTopology() const;
 
@@ -123,7 +130,9 @@ private:
     // included. Capture before, restore after, so extending a desktop never
     // silently alters the screen the user is looking at.
     void capturePrimaryMode();
-    void restorePrimaryMode();
+    void restorePrimaryMode();   // retained but no longer called — see ensureExtendedTopology
+    int m_preferredWidth = 1920;
+    int m_preferredHeight = 1080;
     // Opaque storage for a Win32 DEVMODEW; sized generously and checked with a
     // static_assert in the .cpp so this header need not include Windows.h.
     unsigned char m_savedPrimaryMode[256] = {};

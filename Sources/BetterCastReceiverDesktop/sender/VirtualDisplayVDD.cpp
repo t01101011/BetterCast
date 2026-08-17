@@ -1002,8 +1002,22 @@ bool VirtualDisplayVDD::positionVirtualDisplay() {
         }
 
         DEVMODEW dm = vm.mode;
-        // Carry the current resolution alongside the position. Some indirect
-        // display drivers reject a position-only DEVMODE.
+        // Carry a resolution alongside the position: some indirect display
+        // drivers reject a position-only DEVMODE.
+        //
+        // Also raise the resolution if Windows brought the display up at the
+        // driver's default. An extended VDD monitor appears at 800x600, and
+        // nothing else sets it higher — so the stream went out at 800x600 while
+        // the picker still showed the stale 1920x1080 from the registry.
+        if (static_cast<int>(dm.dmPelsWidth) < m_preferredWidth ||
+            static_cast<int>(dm.dmPelsHeight) < m_preferredHeight) {
+            VDD_LOG(QString("VDD: %1 came up at %2x%3, raising to %4x%5")
+                        .arg(vm.name).arg(dm.dmPelsWidth).arg(dm.dmPelsHeight)
+                        .arg(m_preferredWidth).arg(m_preferredHeight));
+            dm.dmPelsWidth = static_cast<DWORD>(m_preferredWidth);
+            dm.dmPelsHeight = static_cast<DWORD>(m_preferredHeight);
+            cursorX = targetX + m_preferredWidth;   // layout follows the new width
+        }
         dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
         dm.dmPosition.x = targetX;
         dm.dmPosition.y = 0;
@@ -1077,7 +1091,6 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
     // front of. Reported in the field: extending reset a 120Hz laptop panel to
     // 144Hz. Remember the primary's mode now and put it back afterwards, so
     // attaching a virtual display never silently changes the real screen.
-    capturePrimaryMode();
 
     // SDC_TOPOLOGY_EXTEND can report success while leaving the desktop cloned
     // (it restores a *saved* topology, which may itself be stale), so verify
@@ -1091,11 +1104,15 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
         TopologyState after = queryTopology();
         VDD_LOG("VDD: Topology after: " + after.describe());
         if (after.valid && !after.anyCloned) {
-            // Lay the displays out first, then put the primary's mode back.
-            // Doing the restore first re-triggered a topology change and undid
-            // the extend before anything could be positioned or captured.
+            // The primary's mode is deliberately NOT restored here.
+            //
+            // Extending re-applies a saved topology that carries a mode for
+            // every display, so a 120Hz panel can come back at 144Hz. Putting
+            // it back, however carefully, re-triggered a topology change that
+            // detached the virtual displays — twice, on real hardware. A
+            // working extended desktop is worth more than the exact refresh
+            // rate, so the mode is left where Windows puts it.
             positionVirtualDisplay();
-            restorePrimaryMode();
             emit statusChanged("Display extended");
             return true;
         }

@@ -280,7 +280,7 @@ MainWindow::~MainWindow() {
 // ─── UI Setup ───────────────────────────────────────────────────────────────────
 
 void MainWindow::applyTheme() {
-    const Theme::Palette p = Theme::systemPalette();
+    const Theme::Palette p = Theme::activePalette();
     setStyleSheet(Theme::stylesheet(p));
     Theme::applyWindowBackdrop(this, p);
 }
@@ -964,8 +964,41 @@ void MainWindow::setupSettingsPage() {
     layout->setSpacing(16);
 
     auto* pageTitle = new QLabel("Settings");
-    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: white;");
+    pageTitle->setStyleSheet("font-size: 22px; font-weight: 600;");
     layout->addWidget(pageTitle);
+
+    // Appearance
+    auto* themeCard = makeCard("Appearance");
+    auto* themeLayout = new QVBoxLayout(themeCard);
+    themeLayout->setSpacing(10);
+
+    auto* themeRow = new QHBoxLayout();
+    auto* themeLabel = new QLabel("Theme:");
+    themeLabel->setStyleSheet("font-size: 13px;");
+    themeRow->addWidget(themeLabel);
+
+    m_themeCombo = new QComboBox();
+    m_themeCombo->addItem("Follow system", static_cast<int>(Theme::Mode::System));
+    m_themeCombo->addItem("Light", static_cast<int>(Theme::Mode::Light));
+    m_themeCombo->addItem("Dark", static_cast<int>(Theme::Mode::Dark));
+    m_themeCombo->setCurrentIndex(static_cast<int>(Theme::savedMode()));
+    themeRow->addWidget(m_themeCombo);
+    themeRow->addStretch();
+    themeLayout->addLayout(themeRow);
+
+    connect(m_themeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this](int idx) {
+                Theme::setSavedMode(static_cast<Theme::Mode>(idx));
+                applyTheme();
+            });
+
+    auto* themeNote = new QLabel(
+        "\"Follow system\" tracks the Windows light/dark setting and updates live.");
+    themeNote->setWordWrap(true);
+    themeNote->setStyleSheet("font-size: 11px; color: palette(mid);");
+    themeLayout->addWidget(themeNote);
+
+    layout->addWidget(themeCard);
 
     // About card
     auto* aboutCard = makeCard("About");
@@ -1355,6 +1388,9 @@ void MainWindow::onCreateVirtualDisplay() {
     QSize res = m_vddResolutionCombo->currentData().toSize();
     int w = res.width(), h = res.height();
     if (w <= 0 || h <= 0) { w = 1920; h = 1080; }
+    // Windows brings an extended virtual display up at the driver's 800x600
+    // default, so tell the VDD what to raise it to once it is attached.
+    m_sender->vdd()->setPreferredResolution(w, h);
 
     m_createVddBtn->setEnabled(false);
     m_vddStatusLabel->setText("Creating virtual display...");
