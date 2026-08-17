@@ -85,6 +85,10 @@ private:
     // Choose a virtual display no other session is streaming, creating one if
     // none is free. Returns an empty string when nothing suitable exists.
     QString claimDisplayFor(const QString& host);
+
+    // One-time display-driver setup, run on the first send while nothing is
+    // streaming. Safe to call repeatedly.
+    void prepareDisplays();
     bool displayInUse(const QString& displayName) const;
 
     void onFrameCaptured(Session* s, const QByteArray& nv12, int width, int height,
@@ -98,6 +102,14 @@ private:
     // failing for the same reason, so stop trying and let the user decide -
     // five prompts in a row was the observed behaviour otherwise.
     bool m_autoAddFailed = false;
+    bool m_displaysPrepared = false;
+    int  m_desiredPoolSize = 0;   // set from kDisplayPoolSize, grows on demand
+
+    // How many virtual displays to have ready before the first stream starts.
+    // Growing the pool later restarts the driver and kills any live capture, so
+    // it is built once, up front, big enough for the usual phone + tablet +
+    // laptop case.
+    static constexpr int kDisplayPoolSize = 3;
     VirtualDisplayVDD* m_vdd = nullptr;
 
     // Defaults applied to the next session started without explicit values.

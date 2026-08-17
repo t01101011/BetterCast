@@ -21,11 +21,11 @@ SenderController::SenderController(QObject* parent)
     connect(m_vdd, &VirtualDisplayVDD::error,
             this, &SenderController::error);
 
-    // Once, at startup, before anything streams: make sure the driver advertises
-    // the primary's resolution. Without it every virtual display is stuck at the
-    // driver's 800x600 default and no mode change can lift it.
-    const QSize primary = VirtualDisplayVDD::primaryResolution();
-    m_vdd->ensureResolutionAdvertised(primary.width(), primary.height());
+    // Display setup is deliberately not done here. Advertising a resolution and
+    // creating device nodes both need administrator rights, and doing them in
+    // the constructor meant a UAC prompt every launch for people who never send
+    // a screen. Both happen in startSending() instead, on the first send while
+    // nothing is streaming — see prepareDisplays().
 #endif
 }
 
@@ -68,6 +68,29 @@ bool SenderController::displayInUse(const QString& displayName) const {
     return false;
 }
 
+// Everything that disturbs the display driver, done once, before the first
+// stream exists.
+//
+// Both steps restart the Virtual Display Driver: writing vdd_settings.xml makes
+// it reload its mode list, and installing a device node makes it tear down and
+// re-enumerate every monitor it owns, which renames each \\.\DISPLAYn and kills
+// any capture bound to one. That is survivable with nothing streaming and fatal
+// once something is, so it all happens here — on the first send, while the
+// session list is still empty. Later sends find the work already done and pass
+// straight through.
+void SenderController::prepareDisplays() {
+    if (!m_vdd || m_displaysPrepared) return;
+    m_displaysPrepared = true;
+
+    // Without the primary's resolution in the driver's mode list, every virtual
+    // display comes up at the driver's 800x600 default and no later mode change
+    // can lift it — there is nothing better to switch to.
+    const QSize primary = VirtualDisplayVDD::primaryResolution();
+    m_vdd->ensureResolutionAdvertised(primary.width(), primary.height());
+
+    m_vdd->ensureDisplayNodes(qMax(m_desiredPoolSize, kDisplayPoolSize));
+}
+
 // Give each receiver a display of its own. Two receivers sharing one display
 // would mirror rather than extend, which is the opposite of the point.
 QString SenderController::claimDisplayFor(const QString& host) {
@@ -105,10 +128,26 @@ QString SenderController::claimDisplayFor(const QString& host) {
         }
     }
 
-    // Last resort: add a device node. On this driver that is the only thing
-    // that produces a monitor — the settings-file route reported success and
-    // created nothing, restarting the driver under a live stream once per
-    // attempt. Adding a node needs admin, so this raises one UAC prompt.
+    // Out of nodes. Adding one here is what broke the third receiver: installing
+    // a VDD device node makes the driver tear down and re-enumerate every
+    // monitor it owns, so the \\.\DISPLAYn name each live session was capturing
+    // stops existing ("Failed to reinitialize desktop duplication") and the new
+    // monitor is not ready for several seconds either, so the attach that
+    // follows returns DISP_CHANGE_FAILED. The pool is built up front in
+    // startSending() instead, while nothing is streaming. Never grow it under a
+    // live stream.
+    if (!m_sessions.isEmpty()) {
+        LogManager::instance().log(
+            "Sender: Every virtual display is in use and more cannot be added while "
+            "streaming — adding one restarts the driver and would interrupt the "
+            "streams already running.");
+        // Remember that a bigger pool is wanted, and let it be built the next
+        // time the session list is empty.
+        m_desiredPoolSize = m_sessions.size() + 1;
+        m_displaysPrepared = false;
+        return QString();
+    }
+
     if (m_autoAddFailed) {
         LogManager::instance().log(
             "Sender: Not retrying the automatic display add — it already failed once "
@@ -156,6 +195,8 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     emit statusChanged("Sender not available on this platform yet");
     return false;
 #else
+    if (m_sessions.isEmpty()) prepareDisplays();
+
     // A mirrored virtual display shares the primary's framebuffer, so capturing
     // it would just stream a copy of the primary. Fix the topology first.
     if (m_vdd) {
@@ -182,9 +223,13 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     if (s->displayName.isEmpty() || displayInUse(s->displayName)) {
         const QString claimed = claimDisplayFor(receiverHost);
         if (claimed.isEmpty()) {
-            emit error(QString("No display available for %1. Press \"Create Virtual "
-                               "Display\", or stop a stream that is using one.")
-                           .arg(receiverHost));
+            emit error(m_sessions.isEmpty()
+                ? QString("No display available for %1. Press \"Create Virtual "
+                          "Display\".").arg(receiverHost)
+                : QString("No spare virtual display for %1. Stop every stream and "
+                          "start again — BetterCast can only add displays when "
+                          "nothing is streaming, because adding one restarts the "
+                          "display driver.").arg(receiverHost));
             delete s;
             return false;
         }

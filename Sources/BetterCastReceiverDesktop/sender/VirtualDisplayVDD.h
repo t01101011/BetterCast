@@ -93,6 +93,21 @@ public:
     // prompt. Writing vdd_settings.xml does NOT add monitors here.
     bool addVddDeviceNode();
 
+    // Add several nodes behind one UAC prompt. Installing a node makes the
+    // driver re-enumerate every monitor it owns, so device names change and any
+    // capture running against one of them dies — do the whole pool at once,
+    // while nothing is streaming, rather than one node per receiver.
+    bool addVddDeviceNodes(int count);
+
+    // Bring the pool up to `desired` nodes, doing nothing if it is already
+    // there. Returns true if the pool ends up at or above `desired`.
+    bool ensureDisplayNodes(int desired);
+
+    // Block until the driver has actually published `expected` virtual monitors,
+    // or the timeout runs out. A device node exists several seconds before its
+    // monitor does, and attaching in that window fails with DISP_CHANGE_FAILED.
+    bool waitForVirtualMonitors(int expected, int timeoutMs = 20000) const;
+
     // Remove VDD device nodes, keeping the first `keep` of them.
     // Requires administrator rights, so this triggers a single UAC prompt
     // rather than elevating the whole app.

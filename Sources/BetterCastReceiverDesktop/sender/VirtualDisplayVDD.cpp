@@ -12,6 +12,7 @@
 #include <QProcess>
 #include <QSet>
 #include <QThread>
+#include <QElapsedTimer>
 #include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
@@ -649,14 +650,32 @@ bool VirtualDisplayVDD::ensureResolutionAdvertised(int width, int height) {
     // Keep whatever else is listed; we are adding a mode, not replacing the set.
     displays.append({width, height, 60});
     if (!writeVddSettings(displays)) {
+        // Log as well as signal. This runs during construction, before anything
+        // has connected to error(), so the signal alone went nowhere and the
+        // failure looked like silence in the log.
+        VDD_LOG("VDD: Could not update the Virtual Display Driver settings file — "
+                "virtual displays will stay at the driver's default size");
         emit error("Could not update the Virtual Display Driver settings file. "
                    "BetterCast may need to run as administrator once.");
         return false;
     }
 
+    // Confirm the mode is really listed now. The write reporting success is not
+    // the same as the driver offering the size.
+    bool advertised = false;
+    for (const auto& d : readVddSettings()) {
+        if (d.width == width && d.height == height) { advertised = true; break; }
+    }
+    if (!advertised) {
+        VDD_LOG(QString("VDD: %1x%2 is still missing from vdd_settings.xml after "
+                        "writing it").arg(width).arg(height));
+        return false;
+    }
+
     notifyDriverRefresh();
     QThread::msleep(1500);
-    VDD_LOG("VDD: Driver refreshed with the new resolution list");
+    VDD_LOG(QString("VDD: Driver refreshed — %1x%2 is now on offer")
+                .arg(width).arg(height));
     return true;
 }
 
@@ -754,13 +773,25 @@ bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
     dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT |
                   DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
 
-    LONG ret = ChangeDisplaySettingsExW(wname.c_str(), &dm, nullptr,
-                                        CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
-    if (ret != DISP_CHANGE_SUCCESSFUL) {
+    // Retry over a few seconds rather than giving up on the first refusal. A
+    // monitor that has only just been published answers DISP_CHANGE_FAILED to
+    // everything for a while, and a one-shot attempt right after a node install
+    // is exactly what left later receivers with no screen.
+    LONG ret = DISP_CHANGE_FAILED;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        if (attempt > 0) QThread::msleep(1000);
+
+        dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT |
+                      DM_BITSPERPEL | DM_DISPLAYFREQUENCY;
+        ret = ChangeDisplaySettingsExW(wname.c_str(), &dm, nullptr,
+                                       CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        if (ret == DISP_CHANGE_SUCCESSFUL) break;
+
         // Some IDD drivers refuse an explicit refresh rate; retry without it.
         dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
         ret = ChangeDisplaySettingsExW(wname.c_str(), &dm, nullptr,
                                        CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        if (ret == DISP_CHANGE_SUCCESSFUL) break;
     }
     if (ret != DISP_CHANGE_SUCCESSFUL) {
         VDD_LOG(QString("VDD: Could not attach %1 at %2x%3 — %4")
@@ -1068,8 +1099,23 @@ bool VirtualDisplayVDD::setVirtualDisplayResolution(const QString& deviceName,
     best.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL |
                     DM_DISPLAYFREQUENCY | DM_POSITION;
 
-    LONG r = ChangeDisplaySettingsExW(wname.c_str(), &best, nullptr,
-                                      CDS_UPDATEREGISTRY, nullptr);
+    // Stage then commit, the same way attachVirtualDisplay() does. An immediate
+    // CDS_UPDATEREGISTRY makes Windows re-evaluate the whole topology on the
+    // spot, and a driver that is still settling — from a node install or a
+    // topology switch a second earlier — answers DISP_CHANGE_FAILED. Staging
+    // the change and committing separately survives that; a short retry covers
+    // the rest.
+    LONG r = DISP_CHANGE_FAILED;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) QThread::msleep(900);
+
+        r = ChangeDisplaySettingsExW(wname.c_str(), &best, nullptr,
+                                     CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        if (r != DISP_CHANGE_SUCCESSFUL) continue;
+
+        r = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+        if (r == DISP_CHANGE_SUCCESSFUL) break;
+    }
     if (r != DISP_CHANGE_SUCCESSFUL) {
         VDD_LOG(QString("VDD: Could not set %1 to %2x%3 — %4")
                     .arg(deviceName).arg(width).arg(height).arg(dispChangeName(r)));
@@ -1645,15 +1691,68 @@ QVector<VirtualDisplayVDD::VddDevice> VirtualDisplayVDD::enumerateVddDevices() c
     return devices;
 }
 
-// Create a new root-enumerated VDD device node, elevated.
+bool VirtualDisplayVDD::addVddDeviceNode() {
+    return addVddDeviceNodes(1);
+}
+
+bool VirtualDisplayVDD::waitForVirtualMonitors(int expected, int timeoutMs) const {
+    if (expected <= 0) return true;
+
+    QElapsedTimer clock;
+    clock.start();
+    int seen = -1;
+    while (clock.elapsed() < timeoutMs) {
+        int count = 0;
+        for (const auto& mon : enumerateMonitors()) {
+            if (mon.isVirtual) count++;
+        }
+        if (count != seen) {
+            seen = count;
+            VDD_LOG(QString("VDD: %1 of %2 virtual monitor(s) up after %3 ms")
+                        .arg(count).arg(expected).arg(clock.elapsed()));
+        }
+        if (count >= expected) {
+            // Present is not the same as ready — give the driver a moment to
+            // finish publishing modes before anything tries a mode change.
+            QThread::msleep(1200);
+            return true;
+        }
+        QThread::msleep(500);
+    }
+
+    VDD_LOG(QString("VDD: Only %1 of %2 virtual monitor(s) appeared within %3 ms")
+                .arg(seen).arg(expected).arg(timeoutMs));
+    return false;
+}
+
+bool VirtualDisplayVDD::ensureDisplayNodes(int desired) {
+    if (desired <= 0) return true;
+
+    const int have = enumerateVddDevices().size();
+    if (have >= desired) return true;
+
+    VDD_LOG(QString("VDD: %1 virtual display node(s) present, preparing %2 so "
+                    "receivers can each get a screen without restarting the driver "
+                    "mid-stream")
+                .arg(have).arg(desired));
+    return addVddDeviceNodes(desired - have);
+}
+
+// Create root-enumerated VDD device nodes, elevated.
 //
 // The settings-file route reports success and produces nothing on this driver:
 // monitors come from device nodes, so writing vdd_settings.xml just grew the
 // file by one entry per attempt while restarting the driver under a live
 // stream. devcon install is what actually adds a monitor, and it needs admin.
-bool VirtualDisplayVDD::addVddDeviceNode() {
+//
+// Several nodes go into one elevated command deliberately. Installing a node
+// makes the driver tear down and re-enumerate *all* of its monitors, so every
+// \\.\DISPLAYn name it owns changes and any capture running against one of them
+// dies. Creating the whole pool in a single pass means that disruption happens
+// once, while nothing is streaming, instead of once per receiver.
+bool VirtualDisplayVDD::addVddDeviceNodes(int count) {
 #ifdef _WIN32
-    if (m_vddPath.isEmpty()) return false;
+    if (m_vddPath.isEmpty() || count <= 0) return false;
 
     QString inf = m_vddPath + "/MttVDD.inf";
     if (!QFileInfo::exists(inf)) {
@@ -1675,15 +1774,21 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
         QDir::temp().filePath("bettercast_vdd_add.log"));
     QFile::remove(logPath);
 
-    QString inner;
+    QString one;
     if (QFileInfo::exists(devcon)) {
-        inner = QString("\"%1\" install \"%2\" Root\\MttVDD")
-                    .arg(QDir::toNativeSeparators(devcon),
-                         QDir::toNativeSeparators(inf));
+        one = QString("\"%1\" install \"%2\" Root\\MttVDD")
+                  .arg(QDir::toNativeSeparators(devcon),
+                       QDir::toNativeSeparators(inf));
     } else {
-        inner = QString("pnputil.exe /add-driver \"%1\" /install")
-                    .arg(QDir::toNativeSeparators(inf));
+        one = QString("pnputil.exe /add-driver \"%1\" /install")
+                  .arg(QDir::toNativeSeparators(inf));
     }
+
+    // Repeat the install inside the one elevated shell: one UAC prompt for the
+    // whole pool. `&` and not `&&` — a node that fails should not stop the rest.
+    QStringList steps;
+    for (int i = 0; i < count; i++) steps << one;
+    const QString inner = steps.join(" & ");
 
     // cmd /s /c "<whole thing>" — the outer quotes and /s are required.
     //
@@ -1697,7 +1802,10 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
     VDD_LOG("VDD: Running elevated: " + inner);
 
     const int before = enumerateVddDevices().size();
-    emit statusChanged("Adding a virtual display — approve the administrator prompt");
+    emit statusChanged(count == 1
+        ? QString("Adding a virtual display — approve the administrator prompt")
+        : QString("Adding %1 virtual displays — approve the administrator prompt")
+              .arg(count));
 
     SHELLEXECUTEINFOW sei = {};
     sei.cbSize = sizeof(sei);
@@ -1746,6 +1854,13 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
                    "administrator, or add one from VDD Control.");
         return false;
     }
+
+    // A device node exists well before its monitor does. The previous version
+    // stopped at the sleep above and attached immediately, which is why every
+    // attach right after an install came back DISP_CHANGE_FAILED — the driver
+    // was still bringing its monitors up. Wait for them to actually appear.
+    waitForVirtualMonitors(after, 20000);
+
     m_createdDisplayCount = after;
     emit virtualDisplayCreated(-1);
     return true;
@@ -1881,50 +1996,62 @@ bool VirtualDisplayVDD::writeVddSettings(const QVector<VddResolution>& displays)
         settingsPath = m_vddPath + "/" + kSettingsFiles.first();
     }
 
-    // vdd_settings.xml usually lives under C:\Program Files, which is not
-    // writable without elevation. A plain open() fails there, and because that
-    // failure was only reported through a signal nothing was listening to at
-    // startup, the resolution list silently stayed empty — which is why every
-    // virtual display was stuck at the driver's 800x600 default.
+    // Build the file contents in memory so the same bytes can go down either
+    // the direct or the elevated path.
+    QByteArray payload;
+    {
+        QXmlStreamWriter xml(&payload);
+        xml.setAutoFormatting(true);
+        xml.writeStartDocument();
+        xml.writeStartElement("VirtualDisplaySettings");
+        xml.writeStartElement("Displays");
+
+        for (const auto& disp : displays) {
+            xml.writeStartElement("Display");
+            xml.writeTextElement("Width", QString::number(disp.width));
+            xml.writeTextElement("Height", QString::number(disp.height));
+            xml.writeTextElement("RefreshRate", QString::number(disp.refreshRate));
+            xml.writeEndElement(); // Display
+        }
+
+        xml.writeEndElement(); // Displays
+        xml.writeEndElement(); // VirtualDisplaySettings
+        xml.writeEndDocument();
+    }
+
+    // Attempt the plain write, and fall back to elevation only when it is
+    // actually refused.
     //
-    // Build the XML in a temp file first; if the direct write is refused, copy
-    // it into place elevated.
-    const bool directWritable = QFileInfo(QFileInfo(settingsPath).absolutePath()).isWritable();
-    const QString stagePath = directWritable
-        ? settingsPath
-        : QDir::temp().filePath("bettercast_vdd_settings.xml");
-
-    QFile file(stagePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning() << "VDD: Cannot write settings to" << stagePath;
-        return false;
+    // The previous version asked QFileInfo::isWritable() about the directory
+    // first and skipped the elevated path whenever it said yes. On Windows that
+    // check reports the read-only *attribute*, not the ACL — it answers
+    // "writable" for C:\Program Files even for a standard user. So the elevated
+    // copy never ran, open() was denied, and the sole trace was a qWarning that
+    // never reaches the in-app log: the settings file was never updated and
+    // every virtual display stayed on the driver's 800x600 default. Try the
+    // write; let the failure, not a prediction of it, choose the path.
+    bool wrote = false;
+    QFile direct(settingsPath);
+    if (direct.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        wrote = direct.write(payload) == payload.size();
+        direct.close();
+        if (!wrote) VDD_LOG("VDD: Short write to " + settingsPath);
     }
 
-    QXmlStreamWriter xml(&file);
-    xml.setAutoFormatting(true);
-    xml.writeStartDocument();
-    xml.writeStartElement("VirtualDisplaySettings");
-    xml.writeStartElement("Displays");
-
-    for (const auto& disp : displays) {
-        xml.writeStartElement("Display");
-        xml.writeTextElement("Width", QString::number(disp.width));
-        xml.writeTextElement("Height", QString::number(disp.height));
-        xml.writeTextElement("RefreshRate", QString::number(disp.refreshRate));
-        xml.writeEndElement(); // Display
-    }
-
-    xml.writeEndElement(); // Displays
-    xml.writeEndElement(); // VirtualDisplaySettings
-    xml.writeEndDocument();
-
-    file.close();
-
-    if (!directWritable) {
+    if (!wrote) {
 #ifdef _WIN32
+        const QString stagePath = QDir::temp().filePath("bettercast_vdd_settings.xml");
+        QFile stage(stagePath);
+        if (!stage.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            VDD_LOG("VDD: Cannot stage the settings file at " + stagePath);
+            return false;
+        }
+        stage.write(payload);
+        stage.close();
+
         // Copy into Program Files behind a single UAC prompt.
         VDD_LOG("VDD: " + settingsPath + " needs administrator rights — "
-                "copying the new settings into place elevated");
+                "copying the new display modes into place elevated");
         const QString args = QString("/s /c \"copy /Y \"%1\" \"%2\"\"")
                                  .arg(QDir::toNativeSeparators(stagePath),
                                       QDir::toNativeSeparators(settingsPath));
@@ -1953,11 +2080,21 @@ bool VirtualDisplayVDD::writeVddSettings(const QVector<VddResolution>& displays)
             return false;
         }
 #else
+        VDD_LOG("VDD: Cannot write " + settingsPath);
         return false;
 #endif
     }
 
-    VDD_LOG(QString("VDD: Wrote %1 display(s) to %2").arg(displays.size()).arg(settingsPath));
+    // Read it back rather than believing the return code — every long detour on
+    // this driver has come from trusting a success that produced nothing.
+    if (readVddSettings().isEmpty()) {
+        VDD_LOG("VDD: " + settingsPath + " still reads back empty — the write did "
+                                         "not stick");
+        return false;
+    }
+
+    VDD_LOG(QString("VDD: Wrote %1 display mode(s) to %2")
+                .arg(displays.size()).arg(settingsPath));
     return true;
 }
 
