@@ -1,4 +1,5 @@
 #include "VideoEncoderFF.h"
+#include "../MainWindow.h"  // LogManager
 #include <QDebug>
 #include <QElapsedTimer>
 #include <algorithm>
@@ -144,6 +145,17 @@ bool VideoEncoderFF::init(int width, int height, int fps, int bitrateMbps) {
     if (!m_ctx) {
         emit error("No H.264 encoder available. Install FFmpeg with libx264.");
         return false;
+    }
+
+    // Software encoding is fine for one stream and ruinous for several: each
+    // 1080p60 libx264 encode wants two to three cores, so a third receiver on a
+    // quad-core laptop starves and the picture stops arriving. Say so plainly
+    // rather than letting it look like a network fault.
+    if (m_encoderName == "libx264") {
+        LogManager::instance().log(
+            "Sender: Using SOFTWARE encoding (libx264) — no hardware encoder was "
+            "found in this FFmpeg build. Expect heavy CPU load, and trouble with "
+            "more than one receiver at a time.");
     }
 
     m_frame = av_frame_alloc();

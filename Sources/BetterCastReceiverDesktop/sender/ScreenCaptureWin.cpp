@@ -87,10 +87,17 @@ bool ScreenCaptureWin::initD3DForOutput() {
         m_adapterIndex = foundAdapter;
         m_outputIndex = foundOutput;
     } else if (!m_displayName.isEmpty()) {
+        // Falling back to another adapter/output here would capture a DIFFERENT
+        // monitor — in practice the primary, since the defaults are 0/0. That is
+        // how a receiver ended up showing the main panel while the log claimed
+        // it was streaming a virtual display. Refuse instead.
+        factory->Release();
         LogManager::instance().log(
-            QString("Sender: %1 not found in DXGI enumeration — is it attached to the "
-                    "desktop? Falling back to adapter %2 output %3")
-                .arg(m_displayName).arg(m_adapterIndex).arg(m_outputIndex));
+            QString("Sender: %1 is not in the DXGI enumeration — it is not attached "
+                    "to the desktop, so there is nothing to capture.").arg(m_displayName));
+        emit error(m_displayName + " is not attached to the desktop. Extend it in "
+                                   "Display Settings, or pick another display.");
+        return false;
     }
 
     IDXGIAdapter1* selectedAdapter = nullptr;

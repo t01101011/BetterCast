@@ -1280,6 +1280,9 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
 
         if (!alreadyFound && isVirtual) {
             MonitorInfo info;
+            // StateFlags is the only reliable answer. The resolution below can
+            // be a stale persisted mode for a display that is not attached.
+            info.attached = (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
             // These indices are NOT DXGI indices — this branch only runs for
             // displays DXGI could not enumerate (typically a VDD that is not
             // attached to the desktop yet). Publishing the EnumDisplayDevices
@@ -1308,9 +1311,11 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
                 info.height = 1080;
             }
 
-            VDD_LOG(QString("VDD: Found virtual display via EnumDisplayDevices: %1 (%2) %3x%4 flags=0x%5")
+            VDD_LOG(QString("VDD: Found virtual display via EnumDisplayDevices: %1 (%2) %3x%4 "
+                            "flags=0x%5 attached=%6")
                         .arg(devName, devString).arg(info.width).arg(info.height)
-                        .arg(dd.StateFlags, 0, 16));
+                        .arg(dd.StateFlags, 0, 16)
+                        .arg(info.attached ? "yes" : "NO"));
             result.append(info);
         }
         dd = {};

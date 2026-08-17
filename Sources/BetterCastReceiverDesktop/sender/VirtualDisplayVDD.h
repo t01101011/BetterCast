@@ -23,6 +23,13 @@ public:
         int width;
         int height;
         bool isVirtual;      // true if this is a VDD virtual display
+        // Attached to the desktop, i.e. it has a framebuffer to capture.
+        //
+        // Do NOT infer this from width/height: EnumDisplaySettings with
+        // ENUM_REGISTRY_SETTINGS returns the last persisted mode for a display
+        // that is currently detached, so a dead monitor happily reports
+        // 1920x1080. Only DISPLAY_DEVICE_ATTACHED_TO_DESKTOP is authoritative.
+        bool attached = true;
     };
 
     struct VddResolution {

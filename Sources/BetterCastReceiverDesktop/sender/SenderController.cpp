@@ -74,7 +74,7 @@ QString SenderController::claimDisplayFor(const QString& host) {
     // primary panel — capture failed and fell through to the whole desktop.
     // Only ever claim a display that is actually attached.
     auto attachedAndFree = [this](const VirtualDisplayVDD::MonitorInfo& m) {
-        return m.isVirtual && m.width > 0 && m.height > 0 && !displayInUse(m.name);
+        return m.isVirtual && m.attached && !displayInUse(m.name);
     };
 
     for (const auto& mon : m_vdd->enumerateMonitors()) {
@@ -85,14 +85,14 @@ QString SenderController::claimDisplayFor(const QString& host) {
     // over adding another one — the machine accumulates monitors otherwise.
     for (const auto& mon : m_vdd->enumerateMonitors()) {
         if (!mon.isVirtual || displayInUse(mon.name)) continue;
-        if (mon.width > 0 && mon.height > 0) continue;   // already handled above
+        if (mon.attached) continue;   // already handled above
 
         LogManager::instance().log(
             "Sender: " + mon.name + " exists but is detached — attaching it");
         if (m_vdd->attachVirtualDisplay(mon.name)) {
             for (const auto& refreshed : m_vdd->enumerateMonitors()) {
                 if (refreshed.name.compare(mon.name, Qt::CaseInsensitive) == 0 &&
-                    refreshed.width > 0 && refreshed.height > 0) {
+                    refreshed.attached) {
                     return refreshed.name;
                 }
             }
@@ -164,7 +164,7 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
         // (0x0 in the picker). Attach it rather than capturing nothing.
         for (const auto& mon : m_vdd->enumerateMonitors()) {
             if (mon.name.compare(s->displayName, Qt::CaseInsensitive) != 0) continue;
-            if (mon.isVirtual && (mon.width <= 0 || mon.height <= 0)) {
+            if (mon.isVirtual && !mon.attached) {
                 emit statusChanged("Attaching " + s->displayName + "...");
                 if (!m_vdd->attachVirtualDisplay(s->displayName)) {
                     emit error(s->displayName + " could not be attached to the desktop, "

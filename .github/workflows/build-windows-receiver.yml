@@ -46,10 +46,15 @@ jobs:
           restore-keys: |
             vcpkg-ffmpeg-x64-windows-
 
-      - name: Install FFmpeg via vcpkg (with x264 encoder)
+      - name: Install FFmpeg via vcpkg (x264 + hardware encoders)
         shell: pwsh
         run: |
-          vcpkg install "ffmpeg[x264]:x64-windows" --recurse
+          # nvcodec and amf pull in the NVENC and AMF encoders. Without them
+          # avcodec_find_encoder_by_name("h264_nvenc") returns null and the
+          # sender silently falls back to libx264 for every stream — three
+          # concurrent 1080p60 software encodes will bury a laptop CPU, which
+          # showed up as a black screen on the third receiver.
+          vcpkg install "ffmpeg[x264,nvcodec,amf]:x64-windows" --recurse
         env:
           VCPKG_ROOT: C:/vcpkg
 
