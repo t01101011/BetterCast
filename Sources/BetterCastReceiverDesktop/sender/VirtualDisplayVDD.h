@@ -58,7 +58,11 @@ public:
     void refreshInstallStatus();  // re-run detection (e.g. after user installs VDD)
 
     // Virtual display management
-    bool createVirtualDisplay(int width = 1920, int height = 1080, int refreshRate = 60);
+    // allowUiHelper: launch VDD Control to use its named pipe. That pops the
+    // driver's console over the desktop and waits ten seconds for it, so the
+    // automatic path passes false and relies on the settings file instead.
+    bool createVirtualDisplay(int width = 1920, int height = 1080, int refreshRate = 60,
+                              bool allowUiHelper = true);
     bool removeVirtualDisplay(int index = -1); // -1 = remove last
     bool removeAllVirtualDisplays();
     int virtualDisplayCount() const;

@@ -656,20 +656,49 @@ bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
         scan.cb = sizeof(scan);
     }
 
-    // Start from the mode the driver last recorded, so we keep whatever it
-    // considers valid, then force the fields we care about.
-    DEVMODEW dm = {};
+    // Use a mode the driver actually advertises rather than assembling one.
+    //
+    // The previous version started from ENUM_REGISTRY_SETTINGS, forced 32bpp and
+    // a 60Hz refresh, and was refused with DISP_CHANGE_FAILED for every display
+    // on a real machine — which is what stopped a second receiver ever getting a
+    // screen. EnumDisplaySettings lists exactly what will be accepted, so pick
+    // from there: the requested size if offered, otherwise the largest on offer.
+    DEVMODEW chosen = {};
+    bool haveMode = false;
+    DEVMODEW probe = {};
+    probe.dmSize = sizeof(probe);
+    for (DWORD i = 0; EnumDisplaySettingsW(wname.c_str(), i, &probe); i++) {
+        if (probe.dmBitsPerPel != 32) { probe = {}; probe.dmSize = sizeof(probe); continue; }
+
+        const bool wantedSize = static_cast<int>(probe.dmPelsWidth) == width &&
+                                static_cast<int>(probe.dmPelsHeight) == height;
+        const bool chosenIsWanted = haveMode &&
+                                    static_cast<int>(chosen.dmPelsWidth) == width &&
+                                    static_cast<int>(chosen.dmPelsHeight) == height;
+
+        bool better = false;
+        if (!haveMode) {
+            better = true;
+        } else if (wantedSize && !chosenIsWanted) {
+            better = true;                                  // exact size wins
+        } else if (wantedSize == chosenIsWanted) {
+            const quint64 a = quint64(probe.dmPelsWidth) * probe.dmPelsHeight;
+            const quint64 b = quint64(chosen.dmPelsWidth) * chosen.dmPelsHeight;
+            better = (a > b) || (a == b && probe.dmDisplayFrequency > chosen.dmDisplayFrequency);
+        }
+        if (better) { chosen = probe; haveMode = true; }
+
+        probe = {};
+        probe.dmSize = sizeof(probe);
+    }
+
+    if (!haveMode) {
+        VDD_LOG("VDD: " + deviceName + " advertises no usable mode — cannot attach");
+        return false;
+    }
+
+    DEVMODEW dm = chosen;
     dm.dmSize = sizeof(dm);
-    if (!EnumDisplaySettingsW(wname.c_str(), ENUM_REGISTRY_SETTINGS, &dm)) {
-        dm = {};
-        dm.dmSize = sizeof(dm);
-    }
-    if (dm.dmPelsWidth == 0 || dm.dmPelsHeight == 0) {
-        dm.dmPelsWidth = static_cast<DWORD>(width);
-        dm.dmPelsHeight = static_cast<DWORD>(height);
-    }
-    dm.dmBitsPerPel = 32;
-    dm.dmDisplayFrequency = static_cast<DWORD>(refreshRate);
     dm.dmPosition.x = rightEdge;
     dm.dmPosition.y = 0;
     dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT |
@@ -684,10 +713,14 @@ bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
                                        CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
     }
     if (ret != DISP_CHANGE_SUCCESSFUL) {
-        VDD_LOG(QString("VDD: Could not attach %1 — %2")
-                    .arg(deviceName, dispChangeName(ret)));
+        VDD_LOG(QString("VDD: Could not attach %1 at %2x%3 — %4")
+                    .arg(deviceName).arg(dm.dmPelsWidth).arg(dm.dmPelsHeight)
+                    .arg(dispChangeName(ret)));
         return false;
     }
+    VDD_LOG(QString("VDD: Attaching %1 using advertised mode %2x%3 @ %4Hz")
+                .arg(deviceName).arg(dm.dmPelsWidth).arg(dm.dmPelsHeight)
+                .arg(chosen.dmDisplayFrequency));
 
     LONG commit = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
     if (commit != DISP_CHANGE_SUCCESSFUL) {
@@ -1183,7 +1216,8 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
 #endif
 }
 
-bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshRate) {
+bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshRate,
+                                            bool allowUiHelper) {
     if (!m_vddInstalled) {
         emit error("VDD is not installed. Download from github.com/itsmikethetech/Virtual-Display-Driver");
         return false;
@@ -1205,8 +1239,10 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
         VDD_LOG("VDD: Driver installed successfully");
     }
 
-    // Ensure VDD Control is running (provides the named pipe interface)
-    ensureVddControlRunning();
+    // Ensure VDD Control is running (provides the named pipe interface).
+    // Skipped on the automatic path: launching it throws the driver's console
+    // over whatever the user is doing and blocks for ten seconds.
+    if (allowUiHelper) ensureVddControlRunning();
 
     // Method 1: Try VDD named pipe (modern versions)
     VDD_LOG("VDD: Trying named pipe to create display...");

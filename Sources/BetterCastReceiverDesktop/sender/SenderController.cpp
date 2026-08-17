@@ -99,17 +99,29 @@ QString SenderController::claimDisplayFor(const QString& host) {
         }
     }
 
-    // Deliberately NOT creating a display here.
-    //
-    // createVirtualDisplay() launches VDD Control, waits ten seconds for its
-    // named pipe, appends to vdd_settings.xml and restarts the driver. Doing
-    // that automatically on every failed claim popped the driver's console over
-    // the user's desktop, restarted the driver underneath any live stream, and
-    // grew the settings file by one display per attempt — all while still not
-    // producing anything capturable. Creating a display is disruptive enough to
-    // be an explicit choice.
+    // Last resort: add a display. Passing allowUiHelper=false keeps VDD
+    // Control's console from being thrown over the user's desktop, which is
+    // what made this path unbearable before. It still restarts the driver, so
+    // it runs only when nothing existing could be attached.
     LogManager::instance().log(
-        "Sender: No attached virtual display is free for this receiver");
+        "Sender: No attached virtual display is free — creating one for this receiver");
+    if (m_vdd->createVirtualDisplay(1920, 1080, 60, /*allowUiHelper=*/false)) {
+        for (const auto& mon : m_vdd->enumerateMonitors()) {
+            if (attachedAndFree(mon)) return mon.name;
+        }
+        // Created but not attached yet — wake it the same way as any other.
+        for (const auto& mon : m_vdd->enumerateMonitors()) {
+            if (!mon.isVirtual || mon.attached || displayInUse(mon.name)) continue;
+            if (m_vdd->attachVirtualDisplay(mon.name)) {
+                for (const auto& refreshed : m_vdd->enumerateMonitors()) {
+                    if (refreshed.name.compare(mon.name, Qt::CaseInsensitive) == 0 &&
+                        refreshed.attached) {
+                        return refreshed.name;
+                    }
+                }
+            }
+        }
+    }
     return QString();
 }
 
