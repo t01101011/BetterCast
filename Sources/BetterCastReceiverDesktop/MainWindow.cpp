@@ -14,6 +14,11 @@
 #include "sender/SenderController.h"
 #include "sender/VirtualDisplayVDD.h"
 #include "Icons.h"
+#include "Theme.h"
+#include <QDesktopServices>
+#include <QPainter>
+#include <QPainterPath>
+#include <QStyleHints>
 #endif
 
 #include <QVBoxLayout>
@@ -34,126 +39,6 @@
 #include <QMouseEvent>
 #include <thread>
 
-// ─── Dark theme stylesheet ─────────────────────────────────────────────────────
-
-static const char* kDarkStylesheet = R"(
-    QMainWindow { background-color: #1a1a1a; }
-    QSplitter { background-color: #1a1a1a; }
-    QSplitter::handle { background-color: #333; width: 1px; }
-
-    QListWidget {
-        background-color: #1e1e1e;
-        border: none;
-        outline: none;
-        font-size: 13px;
-        padding-top: 8px;
-    }
-    QListWidget::item {
-        color: #ccc;
-        padding: 7px 14px;
-        border-radius: 6px;
-        margin: 1px 8px;
-    }
-    QListWidget::item:selected {
-        background-color: rgba(0, 120, 212, 0.18);
-        color: #4da6ff;
-    }
-    QListWidget::item:hover:!selected {
-        background-color: rgba(255, 255, 255, 0.05);
-    }
-
-    QStackedWidget { background-color: #1a1a1a; }
-    QScrollArea { background-color: #1a1a1a; border: none; }
-    QScrollArea > QWidget > QWidget { background-color: #1a1a1a; }
-
-    QLabel { color: #e0e0e0; }
-
-    QLineEdit {
-        background-color: #2a2a2a;
-        color: white;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 7px 10px;
-        font-size: 13px;
-        selection-background-color: #0078D4;
-    }
-    QLineEdit:focus { border-color: #0078D4; }
-
-    QPushButton {
-        background-color: #333;
-        color: white;
-        border: 1px solid #555;
-        border-radius: 6px;
-        padding: 8px 16px;
-        font-size: 13px;
-    }
-    QPushButton:hover { background-color: #444; border-color: #666; }
-    QPushButton:pressed { background-color: #555; }
-    QPushButton:disabled { background-color: #2a2a2a; color: #666; border-color: #333; }
-
-    QGroupBox {
-        color: #888;
-        border: 1px solid #333;
-        border-radius: 10px;
-        margin-top: 16px;
-        padding: 20px 16px 12px 16px;
-        font-size: 12px;
-        font-weight: bold;
-    }
-    QGroupBox::title {
-        subcontrol-origin: margin;
-        left: 16px;
-        padding: 0 6px;
-        color: #888;
-    }
-
-    QTextEdit {
-        background-color: #111;
-        color: #888;
-        border: none;
-        font-family: "Cascadia Code", "Consolas", "SF Mono", monospace;
-        font-size: 11px;
-    }
-
-    QSpinBox {
-        background-color: #2a2a2a;
-        color: white;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 5px 8px;
-        font-size: 13px;
-    }
-    QSpinBox:focus { border-color: #0078D4; }
-    QSpinBox::up-button, QSpinBox::down-button {
-        background-color: #333;
-        border: none;
-        width: 20px;
-    }
-
-    QComboBox {
-        background-color: #2a2a2a;
-        color: white;
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 5px 8px;
-        font-size: 13px;
-    }
-    QComboBox:focus { border-color: #0078D4; }
-    QComboBox::drop-down { border: none; }
-    QComboBox QAbstractItemView {
-        background-color: #2a2a2a;
-        color: white;
-        selection-background-color: #0078D4;
-    }
-
-    QCheckBox { color: #e0e0e0; font-size: 13px; spacing: 8px; }
-    QCheckBox::indicator {
-        width: 16px; height: 16px;
-        border: 1px solid #555; border-radius: 4px;
-        background-color: #2a2a2a;
-    }
-    QCheckBox::indicator:checked { background-color: #0078D4; border-color: #0078D4; }
-)";
 
 // ─── Sidebar section header helper ──────────────────────────────────────────────
 
@@ -191,6 +76,33 @@ static QListWidgetItem* addSidebarItem(QListWidget* list, const QString& glyph,
 static QGroupBox* makeCard(const QString& title) {
     auto* card = new QGroupBox(title);
     return card;
+}
+
+// macOS masks app icons to a superellipse, so a square logo looks foreign beside
+// one. Qt has no squircle primitive, but a generous corner radius on a rounded
+// rect reads the same at these sizes.
+static QPixmap roundedPixmap(const QPixmap& src, int size, int radius) {
+    if (src.isNull()) return src;
+
+    const qreal dpr = 2.0;   // render at 2x so the curve stays smooth on HiDPI
+    const int px = static_cast<int>(size * dpr);
+
+    QPixmap scaled = src.scaled(px, px, Qt::KeepAspectRatioByExpanding,
+                                Qt::SmoothTransformation);
+    QPixmap out(px, px);
+    out.fill(Qt::transparent);
+
+    QPainter painter(&out);
+    painter.setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    QPainterPath clip;
+    clip.addRoundedRect(0, 0, px, px, radius * dpr, radius * dpr);
+    painter.setClipPath(clip);
+    // Centre the expanded image so a non-square source is cropped, not squashed.
+    painter.drawPixmap((px - scaled.width()) / 2, (px - scaled.height()) / 2, scaled);
+    painter.end();
+
+    out.setDevicePixelRatio(dpr);
+    return out;
 }
 
 // ─── Constructor ────────────────────────────────────────────────────────────────
@@ -367,17 +279,62 @@ MainWindow::~MainWindow() {
 
 // ─── UI Setup ───────────────────────────────────────────────────────────────────
 
+void MainWindow::applyTheme() {
+    const Theme::Palette p = Theme::systemPalette();
+    setStyleSheet(Theme::stylesheet(p));
+    Theme::applyWindowBackdrop(this, p);
+}
+
 void MainWindow::setupUi() {
-    setStyleSheet(kDarkStylesheet);
+    applyTheme();
+
+    // Follow the OS light/dark setting live, so flipping Windows' app theme
+    // does not require restarting BetterCast.
+    if (auto* hints = QGuiApplication::styleHints()) {
+        connect(hints, &QStyleHints::colorSchemeChanged, this,
+                [this](Qt::ColorScheme) { applyTheme(); });
+    }
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     setCentralWidget(m_splitter);
 
-    // Sidebar
+    // Sidebar, with a footer pinned beneath it (macOS uses safeAreaInset for
+    // the same effect).
     m_sidebarList = new QListWidget();
-    m_sidebarList->setFixedWidth(220);
     m_sidebarList->setFocusPolicy(Qt::NoFocus);
     m_sidebarList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto* sidebarPanel = new QWidget();
+    sidebarPanel->setFixedWidth(230);
+    auto* sidebarLayout = new QVBoxLayout(sidebarPanel);
+    sidebarLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarLayout->setSpacing(0);
+    sidebarLayout->addWidget(m_sidebarList, 1);
+
+    auto* footer = new QWidget();
+    auto* footerLayout = new QVBoxLayout(footer);
+    footerLayout->setContentsMargins(16, 10, 16, 12);
+    footerLayout->setSpacing(6);
+
+    auto* donateBtn = new QPushButton("  Support BetterCast");
+    donateBtn->setIcon(Icons::icon(Icons::heart(), QColor("#e0568a")));
+    donateBtn->setCursor(Qt::PointingHandCursor);
+    donateBtn->setToolTip("Open the BetterCast donation page on Whop");
+    donateBtn->setStyleSheet(
+        "QPushButton { background: transparent; border: 1px solid palette(mid); "
+        "border-radius: 8px; padding: 7px 10px; font-size: 12px; }"
+        "QPushButton:hover { background: rgba(224, 86, 138, 0.12); }");
+    connect(donateBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://whop.com/bettercast/bettercast-donate/"));
+    });
+    footerLayout->addWidget(donateBtn);
+
+    auto* madeWith = new QLabel(QString::fromUtf8("Made with \xE2\x99\xA5 \xE2\x80\xA2 open source"));
+    madeWith->setAlignment(Qt::AlignCenter);
+    madeWith->setStyleSheet("font-size: 11px; color: palette(mid);");
+    footerLayout->addWidget(madeWith);
+
+    sidebarLayout->addWidget(footer);
 
     // Detail stack
     m_stack = new QStackedWidget();
@@ -396,7 +353,7 @@ void MainWindow::setupUi() {
     setupSidebar();
 
     // Assemble splitter
-    m_splitter->addWidget(m_sidebarList);
+    m_splitter->addWidget(sidebarPanel);
     m_splitter->addWidget(m_stack);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
@@ -507,7 +464,7 @@ void MainWindow::setupOverviewPage() {
     auto* iconLabel = new QLabel();
     QPixmap appIcon(":/appicon.png");
     if (!appIcon.isNull()) {
-        iconLabel->setPixmap(appIcon.scaled(80, 80, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        iconLabel->setPixmap(roundedPixmap(appIcon, 80, 18));
     }
     iconLabel->setAlignment(Qt::AlignCenter);
     layout->addWidget(iconLabel);

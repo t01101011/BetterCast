@@ -154,6 +154,7 @@ private:
     QString m_selectedDeviceName;   // empty when a fixed page is selected
 
     void setupUi();
+    void applyTheme();       // rebuild the stylesheet for the current OS theme
     void setupSidebar();
     void rebuildSidebar();          // re-run whenever the device list changes
     void setupDevicePage();

@@ -98,6 +98,7 @@ inline QString check()      { return glyph(0xE73E); } // CheckMark
 inline QString warning()    { return glyph(0xE7BA); } // Warning
 inline QString info()       { return glyph(0xE946); } // Info
 inline QString power()      { return glyph(0xE7E8); } // PowerButton
+inline QString heart()      { return glyph(0xEB51); } // HeartFill
 inline QString arrange()    { return glyph(0xE80A); } // Move
 
 // Pick a device glyph from its advertised name, mirroring the macOS

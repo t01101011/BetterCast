@@ -95,6 +95,7 @@ endif()
 set(SOURCES
     main.cpp
     MainWindow.cpp
+    Theme.cpp
     NetworkListener.cpp
     VideoDecoder.cpp
     VideoRenderer.cpp
@@ -108,6 +109,8 @@ set(SOURCES
 
 set(HEADERS
     MainWindow.h
+    Theme.h
+    Icons.h
     NetworkListener.h
     VideoDecoder.h
     VideoRenderer.h
@@ -199,7 +202,8 @@ endif()
 
 # Windows-specific settings
 if(WIN32)
-    target_link_libraries(BetterCastReceiver PRIVATE ws2_32)
+    # dwmapi: Mica backdrop and the dark/light title bar
+    target_link_libraries(BetterCastReceiver PRIVATE ws2_32 dwmapi)
     set_target_properties(BetterCastReceiver PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
