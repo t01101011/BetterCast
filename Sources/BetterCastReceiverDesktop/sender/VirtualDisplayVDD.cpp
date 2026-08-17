@@ -1620,7 +1620,7 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
 
     QString inner;
     if (QFileInfo::exists(devcon)) {
-        inner = QString("\"%1\" install \"%2\" Root\MttVDD")
+        inner = QString("\"%1\" install \"%2\" Root\\MttVDD")
                     .arg(QDir::toNativeSeparators(devcon),
                          QDir::toNativeSeparators(inf));
     } else {
