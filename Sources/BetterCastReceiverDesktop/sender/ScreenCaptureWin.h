@@ -76,6 +76,10 @@ private:
     HBITMAP m_bitmap = nullptr;
     bool m_useGdiFallback = false;
 
+    // Repeat the last frame after this long with no desktop change, so an idle
+    // screen does not look like a frozen stream to a receiver.
+    static constexpr qint64 kKeepAliveIntervalNs = 1000000000LL;  // 1s
+
     std::thread m_thread;
     int m_targetFPS;
     qint64 m_minFrameIntervalNs = 0;  // rate limit; 0 = uncapped

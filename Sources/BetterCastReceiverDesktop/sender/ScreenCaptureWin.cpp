@@ -273,7 +273,20 @@ bool ScreenCaptureWin::captureFrameDxgi() {
 
         if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
             if (havePending) break;   // nothing newer coming — emit what we hold
-            continue;                 // desktop genuinely idle
+
+            // Desktop genuinely idle. Skipping every unchanged frame saves a lot
+            // of bitrate, but sending NOTHING means a receiver that joined during
+            // a still moment shows blank or stale until something moves — which
+            // reads as a frozen stream. Repeat the last frame about once a
+            // second; static content compresses to almost nothing, so the cost
+            // is negligible and the receiver stays in sync.
+            const qint64 idleNs = nowNanos() - m_lastEmitNs;
+            if (m_lastEmitNs != 0 && idleNs > kKeepAliveIntervalNs && !m_nv12.isEmpty()) {
+                m_lastEmitNs = nowNanos();
+                emit frameCaptured(m_nv12, m_resolution.width(), m_resolution.height(),
+                                   m_lastEmitNs);
+            }
+            continue;
         }
 
         if (FAILED(hr)) {
