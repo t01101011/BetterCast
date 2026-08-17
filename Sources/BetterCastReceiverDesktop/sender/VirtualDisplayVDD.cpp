@@ -1609,16 +1609,28 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
         inf = m_vddPath + "/" + infs.first();
     }
 
+    // Run through cmd.exe so the tool's own output can be captured to a file.
+    // Without it this failed silently - "Device nodes 1 -> 1" with no clue why -
+    // and pnputil /add-driver in particular only adds the driver to the store
+    // WITHOUT creating a device node, so it can "succeed" and add no monitor.
     const QString devcon = m_vddPath + "/devcon.exe";
-    QString args;
-    QString exe;
+    const QString logPath = QDir::toNativeSeparators(
+        QDir::temp().filePath("bettercast_vdd_add.log"));
+    QFile::remove(logPath);
+
+    QString inner;
     if (QFileInfo::exists(devcon)) {
-        exe = devcon;
-        args = QString("install \"%1\" Root\MttVDD").arg(QDir::toNativeSeparators(inf));
+        inner = QString("\"%1\" install \"%2\" Root\MttVDD")
+                    .arg(QDir::toNativeSeparators(devcon),
+                         QDir::toNativeSeparators(inf));
     } else {
-        exe = "pnputil.exe";
-        args = QString("/add-driver \"%1\" /install").arg(QDir::toNativeSeparators(inf));
+        inner = QString("pnputil.exe /add-driver \"%1\" /install")
+                    .arg(QDir::toNativeSeparators(inf));
     }
+
+    const QString exe = "cmd.exe";
+    const QString args = QString("/c %1 > \"%2\" 2>&1").arg(inner, logPath);
+    VDD_LOG("VDD: Running elevated: " + inner);
 
     const int before = enumerateVddDevices().size();
     emit statusChanged("Adding a virtual display — approve the administrator prompt");
@@ -1641,9 +1653,25 @@ bool VirtualDisplayVDD::addVddDeviceNode() {
                        : QString("Could not add a virtual display (error %1).").arg(err));
         return false;
     }
+    DWORD exitCode = 0xFFFFFFFF;
     if (sei.hProcess) {
         WaitForSingleObject(sei.hProcess, 60000);
+        GetExitCodeProcess(sei.hProcess, &exitCode);
         CloseHandle(sei.hProcess);
+    }
+    VDD_LOG(QString("VDD: Helper exit code %1").arg(static_cast<int>(exitCode)));
+
+    // Surface whatever the tool said — this is the diagnostic that was missing.
+    QFile out(logPath);
+    if (out.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        const QString text = QString::fromLocal8Bit(out.readAll()).trimmed();
+        out.close();
+        for (const QString& line : text.split('
+', Qt::SkipEmptyParts)) {
+            VDD_LOG("VDD: > " + line.trimmed());
+        }
+    } else {
+        VDD_LOG("VDD: (no output captured from the helper)");
     }
 
     QThread::msleep(1500);

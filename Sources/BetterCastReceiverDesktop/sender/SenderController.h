@@ -94,6 +94,10 @@ private:
     void onSessionDisconnected(Session* s);
 
     QVector<Session*> m_sessions;
+    // Auto-adding a display raises a UAC prompt. If it fails once it will keep
+    // failing for the same reason, so stop trying and let the user decide -
+    // five prompts in a row was the observed behaviour otherwise.
+    bool m_autoAddFailed = false;
     VirtualDisplayVDD* m_vdd = nullptr;
 
     // Defaults applied to the next session started without explicit values.

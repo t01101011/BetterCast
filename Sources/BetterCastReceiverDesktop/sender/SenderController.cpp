@@ -103,6 +103,13 @@ QString SenderController::claimDisplayFor(const QString& host) {
     // that produces a monitor — the settings-file route reported success and
     // created nothing, restarting the driver under a live stream once per
     // attempt. Adding a node needs admin, so this raises one UAC prompt.
+    if (m_autoAddFailed) {
+        LogManager::instance().log(
+            "Sender: Not retrying the automatic display add — it already failed once "
+            "this session. Use \"Create Virtual Display\".");
+        return QString();
+    }
+
     LogManager::instance().log(
         "Sender: No attached virtual display is free — adding one for this receiver");
     if (m_vdd->addVddDeviceNode()) {
@@ -122,6 +129,7 @@ QString SenderController::claimDisplayFor(const QString& host) {
             }
         }
     }
+    m_autoAddFailed = true;
     return QString();
 }
 
