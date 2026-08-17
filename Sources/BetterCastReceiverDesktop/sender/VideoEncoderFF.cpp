@@ -33,9 +33,15 @@ bool VideoEncoderFF::tryEncoder(const char* codecName, int width, int height, in
 
     ctx->width = width;
     ctx->height = height;
-    // Microsecond timebase so real capture timestamps survive intact rather
-    // than being quantised onto an assumed frame grid.
-    ctx->time_base = {1, 1000000};
+    // Frame-indexed timebase. Do NOT switch this to a real (microsecond) clock:
+    // the iOS receiver is the only one that installs a controlTimebase on its
+    // AVSampleBufferDisplayLayer, so it presents each frame AT its PTS instead
+    // of on arrival. A synthetic clock that only advances per transmitted frame
+    // always trails wall time, so frames read as slightly late and are shown
+    // immediately. Real capture timestamps combined with skipping unchanged
+    // frames broke that assumption and the iPhone went black, while the macOS
+    // and desktop receivers — which render on arrival — saw nothing wrong.
+    ctx->time_base = {1, fps};
     ctx->framerate = {fps, 1};
     ctx->pix_fmt = AV_PIX_FMT_NV12;
     ctx->bit_rate = bitrate;
@@ -239,6 +245,8 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, q
         if (!m_ctx) return;
     }
 
+    // ptsNanos is the real capture time. It is deliberately NOT put on the wire
+    // (see the timebase comment in tryEncoder); it is kept only for diagnostics.
     if (m_firstPtsNanos < 0) m_firstPtsNanos = ptsNanos;
 
     av_frame_make_writable(m_frame);
@@ -257,9 +265,8 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, q
         memcpy(m_frame->data[1] + y * m_frame->linesize[1], uvSrc + y * width, width);
     }
 
-    // Microseconds since the first frame, matching ctx->time_base.
-    m_frame->pts = (ptsNanos - m_firstPtsNanos) / 1000;
-    m_frameCount++;
+    // One tick per transmitted frame, matching ctx->time_base of {1, fps}.
+    m_frame->pts = m_frameCount++;
 
     if (m_forceKeyframe) {
         m_frame->pict_type = AV_PICTURE_TYPE_I;
@@ -284,8 +291,11 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, q
         if (ret < 0) break;
 
         // Build BetterCast video payload: [8B PTS nanoseconds][AVCC NALUs]
-        // ctx->time_base is microseconds, so scale up to the wire's nanoseconds.
-        uint64_t ptsNanos = static_cast<uint64_t>(m_pkt->pts < 0 ? 0 : m_pkt->pts) * 1000ULL;
+        // Frame index scaled to nanoseconds. This is the wire contract every
+        // shipped receiver was built against — the iOS one schedules playback
+        // from it, so changing the scale here breaks devices in the field.
+        uint64_t ptsNanos = static_cast<uint64_t>(m_pkt->pts < 0 ? 0 : m_pkt->pts)
+                            * (1000000000ULL / static_cast<uint64_t>(m_fps));
 
         QByteArray payload;
         payload.reserve(8 + m_pkt->size + 64);
