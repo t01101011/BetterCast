@@ -101,8 +101,10 @@ public:
     // Attach a specific virtual display to the desktop and place it beside the
     // others. A VDD device node can exist while its monitor is detached — it
     // then reports 0x0 and has no framebuffer, so capturing it yields nothing.
+    // width/height of 0 means "use the preferred resolution", which defaults to
+    // whatever the primary display is running at.
     bool attachVirtualDisplay(const QString& deviceName,
-                              int width = 1920, int height = 1080, int refreshRate = 60);
+                              int width = 0, int height = 0, int refreshRate = 60);
 
     // Resolution virtual displays should run at. Windows brings an extended VDD
     // monitor up at the driver default of 800x600, so without this the stream
@@ -113,6 +115,19 @@ public:
 
     // Raise a virtual display to a resolution the driver advertises.
     bool setVirtualDisplayResolution(const QString& deviceName, int width, int height);
+
+    // Make sure the driver OFFERS this resolution at all.
+    //
+    // vdd_settings.xml lists the modes the virtual monitors advertise. With an
+    // empty list the driver falls back to 800x600, and every attempt to set
+    // anything larger is refused - which is why second displays streamed at
+    // 800x600 no matter what the mode-setting code did. Restarts the driver, so
+    // call it at startup, never mid-stream.
+    bool ensureResolutionAdvertised(int width, int height);
+
+    // The primary display's current resolution, so virtual displays can default
+    // to matching the real screen rather than the driver's 800x600.
+    static QSize primaryResolution();
 
     // Display topology
     TopologyState queryTopology() const;

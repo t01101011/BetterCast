@@ -20,6 +20,12 @@ SenderController::SenderController(QObject* parent)
             this, &SenderController::statusChanged);
     connect(m_vdd, &VirtualDisplayVDD::error,
             this, &SenderController::error);
+
+    // Once, at startup, before anything streams: make sure the driver advertises
+    // the primary's resolution. Without it every virtual display is stuck at the
+    // driver's 800x600 default and no mode change can lift it.
+    const QSize primary = VirtualDisplayVDD::primaryResolution();
+    m_vdd->ensureResolutionAdvertised(primary.width(), primary.height());
 #endif
 }
 
@@ -203,7 +209,10 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
 
     // Windows brings an extended virtual display up at the driver's 800x600
     // default. Raise it before capture starts, or the stream goes out at 800x600.
-    if (m_vdd) m_vdd->setVirtualDisplayResolution(s->displayName, 1920, 1080);
+    if (m_vdd) {
+        const QSize target = VirtualDisplayVDD::primaryResolution();
+        m_vdd->setVirtualDisplayResolution(s->displayName, target.width(), target.height());
+    }
 
     LogManager::instance().log(
         QString("Sender: Streaming %1 to %2 (session %3 of %4)")

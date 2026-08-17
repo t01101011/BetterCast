@@ -204,6 +204,12 @@ static const QStringList kVddHardwareIds = {
 VirtualDisplayVDD::VirtualDisplayVDD(QObject* parent)
     : QObject(parent)
 {
+    // Match the real screen by default. The driver's own default is 800x600,
+    // which is what second displays were streaming at.
+    const QSize primary = primaryResolution();
+    m_preferredWidth = primary.width();
+    m_preferredHeight = primary.height();
+
     m_vddInstalled = detectVddInstall();
     if (m_vddInstalled) {
         VDD_LOG("VDD: Found installation at " + m_vddPath);
@@ -614,10 +620,54 @@ bool VirtualDisplayVDD::activateVirtualDisplay() {
     return false;
 }
 
+QSize VirtualDisplayVDD::primaryResolution() {
+#ifdef _WIN32
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm) &&
+        dm.dmPelsWidth > 0 && dm.dmPelsHeight > 0) {
+        return QSize(static_cast<int>(dm.dmPelsWidth), static_cast<int>(dm.dmPelsHeight));
+    }
+#endif
+    return QSize(1920, 1080);
+}
+
+bool VirtualDisplayVDD::ensureResolutionAdvertised(int width, int height) {
+    if (!m_vddInstalled || width <= 0 || height <= 0) return false;
+
+    auto displays = readVddSettings();
+    for (const auto& d : displays) {
+        if (d.width == width && d.height == height) {
+            return true;   // already offered — nothing to do, no driver restart
+        }
+    }
+
+    VDD_LOG(QString("VDD: %1x%2 is not in vdd_settings.xml — adding it so virtual "
+                    "displays can actually run at that size")
+                .arg(width).arg(height));
+
+    // Keep whatever else is listed; we are adding a mode, not replacing the set.
+    displays.append({width, height, 60});
+    if (!writeVddSettings(displays)) {
+        emit error("Could not update the Virtual Display Driver settings file. "
+                   "BetterCast may need to run as administrator once.");
+        return false;
+    }
+
+    notifyDriverRefresh();
+    QThread::msleep(1500);
+    VDD_LOG("VDD: Driver refreshed with the new resolution list");
+    return true;
+}
+
 bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
                                              int width, int height, int refreshRate) {
 #ifdef _WIN32
     if (deviceName.isEmpty()) return false;
+    // 0 means "match the primary", which is what a virtual display should do
+    // rather than falling back to the driver's 800x600.
+    if (width <= 0)  width = m_preferredWidth;
+    if (height <= 0) height = m_preferredHeight;
     const std::wstring wname = deviceName.toStdWString();
 
     DISPLAY_DEVICEW dd = {};
