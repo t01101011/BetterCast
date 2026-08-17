@@ -142,6 +142,13 @@ private:
         QString host;
         uint16_t port = 51820;
         bool connected = false;
+        // Stream settings belong to the device, not the app: a phone on WiFi and
+        // a laptop on ethernet want different rates, and one global pair of
+        // spinboxes cannot express that. Seeded from the Send page defaults the
+        // first time a device is seen, then owned by that device.
+        int fps = 60;
+        int bitrateMbps = 20;
+        bool settingsCustomised = false;
     };
     QVector<DeviceEntry> m_devices;
     QString m_selectedDeviceName;   // empty when a fixed page is selected

@@ -118,6 +118,16 @@ private:
     bool applyExtendTopology();          // SDC_TOPOLOGY_EXTEND — the Win+P route
     bool applyExtendTopologySupplied();  // explicit one-source-per-target path set
     bool positionVirtualDisplay();       // place it to the right of the primary
+
+    // Topology changes re-apply a saved mode to every display, the primary
+    // included. Capture before, restore after, so extending a desktop never
+    // silently alters the screen the user is looking at.
+    void capturePrimaryMode();
+    void restorePrimaryMode();
+    // Opaque storage for a Win32 DEVMODEW; sized generously and checked with a
+    // static_assert in the .cpp so this header need not include Windows.h.
+    unsigned char m_savedPrimaryMode[256] = {};
+    bool m_havePrimaryMode = false;
     bool writeVddSettings(const QVector<VddResolution>& displays);
     QVector<VddResolution> readVddSettings() const;
     bool notifyDriverRefresh();

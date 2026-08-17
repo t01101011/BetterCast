@@ -29,6 +29,7 @@
 #include <devguid.h>
 #include <cfgmgr32.h>
 #include <shellapi.h>   // ShellExecuteEx, for the elevated removal helper
+#include <cstring>      // memcpy, for the saved primary DEVMODE
 #include <string>
 
 #pragma comment(lib, "dxgi.lib")
@@ -106,29 +107,25 @@ bool queryPaths(QVector<DISPLAYCONFIG_PATH_INFO>& paths,
 // Observed: DISPLAY21/24/25 were labelled NVIDIA/Intel and lost their [Virtual]
 // tag as soon as they attached, while the log had already identified all four as
 // "Virtual Display Driver".
-QString displayDeviceStrings(const QString& deviceName) {
-    QString combined;
-
+// The DISPLAY ADAPTER behind "\\.\DISPLAYn" — "Virtual Display Driver" for a
+// VDD monitor, "Intel(R) UHD Graphics" for a real one.
+//
+// Deliberately only the adapter string. An earlier version also folded in the
+// monitor name and its DeviceID and substring-matched the lot, which was noisy
+// enough to match the built-in laptop panel: every display on the machine came
+// back tagged [Virtual], including DISPLAY1.
+QString displayAdapterString(const QString& deviceName) {
     DISPLAY_DEVICEW dd = {};
     dd.cb = sizeof(dd);
     for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
         if (deviceName.compare(QString::fromWCharArray(dd.DeviceName),
                                Qt::CaseInsensitive) == 0) {
-            combined += QString::fromWCharArray(dd.DeviceString);
-            break;
+            return QString::fromWCharArray(dd.DeviceString);
         }
         dd = {};
         dd.cb = sizeof(dd);
     }
-
-    // Also the monitor hanging off that adapter, e.g. "Generic PnP Monitor".
-    DISPLAY_DEVICEW mon = {};
-    mon.cb = sizeof(mon);
-    if (EnumDisplayDevicesW(reinterpret_cast<LPCWSTR>(deviceName.utf16()), 0, &mon, 0)) {
-        combined += " " + QString::fromWCharArray(mon.DeviceString);
-        combined += " " + QString::fromWCharArray(mon.DeviceID);
-    }
-    return combined;
+    return QString();
 }
 
 // ChangeDisplaySettingsEx returns bare negative numbers; naming them turns an
@@ -866,6 +863,54 @@ bool VirtualDisplayVDD::applyExtendTopologySupplied() {
     return false;
 }
 
+// Stash the primary display's current mode so a topology change can be undone.
+void VirtualDisplayVDD::capturePrimaryMode() {
+#ifdef _WIN32
+    static_assert(sizeof(DEVMODEW) <= sizeof(m_savedPrimaryMode),
+                  "m_savedPrimaryMode is too small for DEVMODEW");
+    DEVMODEW dm = {};
+    dm.dmSize = sizeof(dm);
+    m_havePrimaryMode = EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &dm);
+    if (m_havePrimaryMode) memcpy(m_savedPrimaryMode, &dm, sizeof(dm));
+#endif
+}
+
+// Put the primary display back to the resolution and refresh rate it had before
+// a topology change. No-op when nothing moved.
+void VirtualDisplayVDD::restorePrimaryMode() {
+#ifdef _WIN32
+    if (!m_havePrimaryMode) return;
+    DEVMODEW before = {};
+    memcpy(&before, m_savedPrimaryMode, sizeof(before));
+
+    DEVMODEW now = {};
+    now.dmSize = sizeof(now);
+    if (!EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &now)) return;
+
+    if (now.dmPelsWidth == before.dmPelsWidth &&
+        now.dmPelsHeight == before.dmPelsHeight &&
+        now.dmDisplayFrequency == before.dmDisplayFrequency) {
+        return;   // untouched
+    }
+
+    VDD_LOG(QString("VDD: Topology change altered the primary (%1x%2@%3Hz -> "
+                    "%4x%5@%6Hz) — restoring")
+                .arg(before.dmPelsWidth).arg(before.dmPelsHeight).arg(before.dmDisplayFrequency)
+                .arg(now.dmPelsWidth).arg(now.dmPelsHeight).arg(now.dmDisplayFrequency));
+
+    DEVMODEW target = before;
+    target.dmSize = sizeof(target);
+    target.dmFields = DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY | DM_BITSPERPEL;
+
+    LONG r = ChangeDisplaySettingsExW(nullptr, &target, nullptr, CDS_UPDATEREGISTRY, nullptr);
+    if (r != DISP_CHANGE_SUCCESSFUL) {
+        VDD_LOG("VDD: Could not restore the primary display mode — " + dispChangeName(r));
+    } else {
+        VDD_LOG("VDD: Primary display mode restored");
+    }
+#endif
+}
+
 bool VirtualDisplayVDD::positionVirtualDisplay() {
 #ifdef _WIN32
     // Find the primary so we can park the virtual display just past its right edge.
@@ -1006,6 +1051,13 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
 
     VDD_LOG("VDD: Desktop is mirrored — switching to extend...");
 
+    // SDC_TOPOLOGY_EXTEND restores a SAVED topology, and that saved state
+    // carries a mode for every display — including the one you are sitting in
+    // front of. Reported in the field: extending reset a 120Hz laptop panel to
+    // 144Hz. Remember the primary's mode now and put it back afterwards, so
+    // attaching a virtual display never silently changes the real screen.
+    capturePrimaryMode();
+
     // SDC_TOPOLOGY_EXTEND can report success while leaving the desktop cloned
     // (it restores a *saved* topology, which may itself be stale), so verify
     // after each attempt rather than trusting the return code.
@@ -1018,6 +1070,7 @@ bool VirtualDisplayVDD::ensureExtendedTopology() {
         TopologyState after = queryTopology();
         VDD_LOG("VDD: Topology after: " + after.describe());
         if (after.valid && !after.anyCloned) {
+            restorePrimaryMode();
             positionVirtualDisplay();
             emit statusChanged("Display extended");
             return true;
@@ -1237,7 +1290,7 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
 
                 // Ask Windows what drives this display rather than trusting the
                 // DXGI adapter description, which names the rendering GPU.
-                const QString devStrings = displayDeviceStrings(info.name);
+                const QString devStrings = displayAdapterString(info.name);
                 info.isVirtual = looksVirtual(adapterName) || looksVirtual(devStrings);
                 if (info.isVirtual && !looksVirtual(adapterName)) {
                     // Show the useful name in the picker, not the host GPU.

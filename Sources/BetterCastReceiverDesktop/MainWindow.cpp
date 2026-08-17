@@ -1370,8 +1370,17 @@ void MainWindow::onSendScreenClicked() {
     m_senderStatusLabel->setText("Starting sender...");
     m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #4da6ff;");
 
+    // Prefer the target device's own settings; the spinboxes here are defaults
+    // for devices that have not been customised.
     int fps = m_fpsSpinBox->value();
     int bitrate = m_bitrateSpinBox->value();
+    for (const auto& dev : m_devices) {
+        if (dev.host == host && dev.settingsCustomised) {
+            fps = dev.fps;
+            bitrate = dev.bitrateMbps;
+            break;
+        }
+    }
     LogManager::instance().log(QString("Starting sender to %1 at %2 FPS, %3 Mbps")
                                    .arg(host).arg(fps).arg(bitrate));
 
@@ -1540,10 +1549,12 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
             if (m_sendHostEdit) m_sendHostEdit->setText(device.host);
             m_selectedReceiverPort = device.port;
-            // Empty display: the controller claims one not already in use, so a
-            // second receiver gets its own screen rather than mirroring the first.
-            const int fps = m_fpsSpinBox ? m_fpsSpinBox->value() : 60;
-            const int bitrate = m_bitrateSpinBox ? m_bitrateSpinBox->value() : 20;
+            // This device's own settings, not the Send page's globals. Empty
+            // display: the controller claims one not already in use, so a second
+            // receiver gets its own screen rather than mirroring the first.
+            const int idx = indexOfDevice(device.name);
+            const int fps = idx >= 0 ? m_devices[idx].fps : device.fps;
+            const int bitrate = idx >= 0 ? m_devices[idx].bitrateMbps : device.bitrateMbps;
             m_sender->startSending(device.host, device.port, fps, bitrate, QString());
             onDeviceRowSelected(device.name);
         });
@@ -1561,6 +1572,66 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
     cardLayout->addLayout(btnRow);
 
     bodyLayout->addWidget(card);
+
+    // Per-device stream quality. Mirrors the macOS DiscoveredDeviceView, where
+    // resolution and quality live on the device rather than on the app.
+    auto* qualityCard = makeCard("Stream quality for this device");
+    auto* qLayout = new QVBoxLayout(qualityCard);
+    qLayout->setSpacing(10);
+
+    const int deviceIdx = indexOfDevice(device.name);
+
+    auto* fpsRow = new QHBoxLayout();
+    auto* fpsLabel = new QLabel("Frame Rate:");
+    fpsLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    fpsRow->addWidget(fpsLabel);
+    auto* fpsSpin = new QSpinBox();
+    fpsSpin->setRange(15, 120);
+    fpsSpin->setSingleStep(5);
+    fpsSpin->setSuffix(" FPS");
+    fpsSpin->setValue(device.fps);
+    fpsRow->addWidget(fpsSpin);
+    fpsRow->addStretch();
+    qLayout->addLayout(fpsRow);
+
+    auto* brRow = new QHBoxLayout();
+    auto* brLabel = new QLabel("Bitrate:");
+    brLabel->setStyleSheet("font-size: 13px; color: #ccc;");
+    brRow->addWidget(brLabel);
+    auto* brSpin = new QSpinBox();
+    brSpin->setRange(2, 100);
+    brSpin->setSuffix(" Mbps");
+    brSpin->setValue(device.bitrateMbps);
+    brRow->addWidget(brSpin);
+    brRow->addStretch();
+    qLayout->addLayout(brRow);
+
+    // Changes apply to the next stream to this device; restarting a live
+    // session mid-stream would drop the picture on the receiver.
+    if (deviceIdx >= 0) {
+        connect(fpsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this, deviceIdx](int v) {
+                    if (deviceIdx >= m_devices.size()) return;
+                    m_devices[deviceIdx].fps = v;
+                    m_devices[deviceIdx].settingsCustomised = true;
+                });
+        connect(brSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
+                [this, deviceIdx](int v) {
+                    if (deviceIdx >= m_devices.size()) return;
+                    m_devices[deviceIdx].bitrateMbps = v;
+                    m_devices[deviceIdx].settingsCustomised = true;
+                });
+    }
+
+    if (streaming) {
+        auto* note = new QLabel("Changes take effect the next time you start "
+                                "streaming to this device.");
+        note->setWordWrap(true);
+        note->setStyleSheet("font-size: 11px; color: #888;");
+        qLayout->addWidget(note);
+    }
+
+    bodyLayout->addWidget(qualityCard);
 
     // Receiving the other way round: this device sends, we display it.
     auto* recvCard = makeCard("Receive from this device");
@@ -1769,7 +1840,14 @@ void MainWindow::onReceiverDiscovered(const DiscoveredService& service) {
         m_devices[existingIdx].host = service.host;
         m_devices[existingIdx].port = port;
     } else {
-        m_devices.append({service.name, service.host, port, false});
+        DeviceEntry entry;
+        entry.name = service.name;
+        entry.host = service.host;
+        entry.port = port;
+        // Seed from the Send page, then this device owns its own settings.
+        entry.fps = m_fpsSpinBox ? m_fpsSpinBox->value() : 60;
+        entry.bitrateMbps = m_bitrateSpinBox ? m_bitrateSpinBox->value() : 20;
+        m_devices.append(entry);
     }
     rebuildSidebar();
     if (service.port != port) {
