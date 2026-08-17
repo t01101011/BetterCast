@@ -5,7 +5,6 @@
 #include "InputEvent.h"
 
 class VideoRenderer;
-class QKeyEvent;
 
 // Captures mouse/keyboard events from the video widget and converts
 // them to normalized InputEvent objects for sending to the Mac sender.
@@ -32,10 +31,6 @@ private:
     // accounting for letterboxing/pillarboxing
     struct NormalizedPoint { double x; double y; bool valid; };
     NormalizedPoint normalize(double widgetX, double widgetY) const;
-
-    // Convert a platform key event to the macOS key code the wire expects.
-    // Returns false when there is no mapping, in which case nothing is sent.
-    bool translateKey(const QKeyEvent* ke, uint16_t& codeOut) const;
 
     VideoRenderer* m_renderer = nullptr;
     QSize m_contentSize{1920, 1080};

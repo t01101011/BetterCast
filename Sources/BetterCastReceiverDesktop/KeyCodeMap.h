@@ -5,14 +5,12 @@
 // .keyCode straight into CGEvent(keyboardEventSource:virtualKey:), so every
 // receiver has to speak that vocabulary for typing to work.
 //
-// Windows uses a completely different space (VK_*), so both directions need a
-// translation:
-//   * Windows RECEIVER  → outgoing key events must be converted VK → mac.
-//   * Windows SENDER    → incoming key events must be converted mac → VK.
+// This header covers the SENDER direction: a receiver hands us mac key codes
+// and we replay them locally with SendInput, which needs Windows VK_* codes.
 //
-// Before this table existed the Windows receiver sent raw VK codes, which the
-// macOS sender then interpreted as mac key codes — so typing from a Windows
-// receiver produced the wrong characters entirely.
+// The opposite direction — the Windows/Linux receiver converting local key
+// presses to mac codes on the way out — lives in InputHandler.cpp, which maps
+// Qt::Key so one table serves both platforms. Do not duplicate it here.
 
 #include <cstdint>
 
@@ -144,24 +142,6 @@ inline uint16_t macToVk(uint16_t macCode, bool commandAsControl = true) {
     const Pair* t = table(count);
     for (int i = 0; i < count; i++) {
         if (t[i].mac == macCode) return t[i].vk;
-    }
-    return 0;
-}
-
-// Windows VK → mac virtual key code. Returns 0 when unmapped.
-inline uint16_t vkToMac(uint16_t vk) {
-    // Normalise the ambiguous "either side" modifiers onto the left-hand key.
-    switch (vk) {
-        case 0x10: vk = 0xA0; break;  // VK_SHIFT   → VK_LSHIFT
-        case 0x11: vk = 0xA2; break;  // VK_CONTROL → VK_LCONTROL
-        case 0x12: vk = 0xA4; break;  // VK_MENU    → VK_LMENU
-        default: break;
-    }
-
-    int count = 0;
-    const Pair* t = table(count);
-    for (int i = 0; i < count; i++) {
-        if (t[i].vk == vk) return t[i].mac;
     }
     return 0;
 }
