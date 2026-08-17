@@ -18,19 +18,60 @@
 
 #include <QString>
 #include <QFont>
+#include <QFontDatabase>
+#include <QIcon>
+#include <QPainter>
+#include <QPixmap>
+#include <QColor>
 
 namespace Icons {
 
-// Font stack: Fluent first, MDL2 for Windows 10, then a generic fallback.
-inline QFont font(int pointSize = 12) {
-    QFont f;
-    f.setPointSize(pointSize);
+// The icon font must be applied to whatever draws the glyph. Concatenating the
+// glyph into a label's text does NOT work: the label renders in the UI font
+// (Segoe UI), which has nothing at these private-use codepoints, so every icon
+// came out as an empty box.
+inline QString availableFamily() {
+    static const QString family = []() -> QString {
+        const QStringList candidates = {"Segoe Fluent Icons", "Segoe MDL2 Assets"};
+        const QStringList installed = QFontDatabase::families();
+        for (const auto& c : candidates) {
+            if (installed.contains(c)) return c;
+        }
+        return QString();   // no icon font — callers fall back to text only
+    }();
+    return family;
+}
+
+inline QFont font(int pixelSize = 16) {
+    QFont f(availableFamily());
+    f.setPixelSize(pixelSize);
     f.setStyleStrategy(QFont::PreferAntialias);
-    f.setFamilies({"Segoe Fluent Icons", "Segoe MDL2 Assets", "Segoe UI Symbol"});
     return f;
 }
 
 inline QString glyph(char16_t code) { return QString(QChar(code)); }
+
+// Render a glyph into a QIcon so it can be attached with setIcon(), keeping the
+// label text in the normal UI font. Returns a null icon when no icon font is
+// installed, which leaves a clean text-only row rather than a row of tofu.
+inline QIcon icon(const QString& glyphStr, const QColor& color = QColor("#c8c8c8"),
+                  int sizePx = 16) {
+    if (availableFamily().isEmpty()) return QIcon();
+
+    const qreal dpr = 2.0;   // render at 2x so it stays sharp on HiDPI
+    QPixmap pm(static_cast<int>(sizePx * dpr), static_cast<int>(sizePx * dpr));
+    pm.fill(Qt::transparent);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::TextAntialiasing);
+    p.setFont(font(static_cast<int>(sizePx * dpr)));
+    p.setPen(color);
+    p.drawText(pm.rect(), Qt::AlignCenter, glyphStr);
+    p.end();
+
+    pm.setDevicePixelRatio(dpr);
+    return QIcon(pm);
+}
 
 // Navigation — mapped from the macOS sidebar's SF Symbols
 inline QString overview()   { return glyph(0xE7F4); } // TVMonitor   <- rectangle.on.rectangle

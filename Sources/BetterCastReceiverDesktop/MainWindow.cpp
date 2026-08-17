@@ -174,9 +174,12 @@ static QListWidgetItem* addSidebarSection(QListWidget* list, const QString& titl
     return item;
 }
 
-static QListWidgetItem* addSidebarItem(QListWidget* list, const QString& icon,
+static QListWidgetItem* addSidebarItem(QListWidget* list, const QString& glyph,
                                         const QString& title, int pageIndex) {
-    auto* item = new QListWidgetItem(QString("%1  %2").arg(icon, title));
+    // The glyph goes on as an icon, not into the text: list text draws in the UI
+    // font, which has no private-use glyphs and renders them as empty boxes.
+    auto* item = new QListWidgetItem(title);
+    item->setIcon(Icons::icon(glyph));
     item->setData(Qt::UserRole, pageIndex);
     item->setSizeHint(QSize(0, 34));
     list->addItem(item);
@@ -433,8 +436,9 @@ void MainWindow::rebuildSidebar() {
         m_sidebarList->addItem(searching);
     } else {
         for (const auto& dev : m_devices) {
-            auto* item = new QListWidgetItem(
-                QString("%1  %2").arg(Icons::forDeviceName(dev.name), dev.name));
+            auto* item = new QListWidgetItem(dev.name);
+            item->setIcon(Icons::icon(Icons::forDeviceName(dev.name),
+                                      dev.connected ? QColor("#4caf50") : QColor("#c8c8c8")));
             item->setData(Qt::UserRole, m_pageDevice);
             item->setData(Qt::UserRole + 1, dev.name);
             item->setSizeHint(QSize(0, 42));
@@ -1485,7 +1489,8 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
     cardLayout->addWidget(hint);
 
     auto* btnRow = new QHBoxLayout();
-    auto* sendBtn = new QPushButton(Icons::send() + "  Send Screen Here");
+    auto* sendBtn = new QPushButton("Send Screen Here");
+    sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
     sendBtn->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
         "padding: 9px 20px; border-radius: 6px; border: none; }"
@@ -1509,6 +1514,32 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
     cardLayout->addLayout(btnRow);
 
     bodyLayout->addWidget(card);
+
+    // Receiving the other way round: this device sends, we display it.
+    auto* recvCard = makeCard("Receive from this device");
+    auto* recvLayout = new QVBoxLayout(recvCard);
+    recvLayout->setSpacing(10);
+
+    auto* recvHint = new QLabel(
+        QString("BetterCast is listening on port 51820 and is advertised to %1 over "
+                "mDNS. Streaming is started by whichever device is sending, so pick "
+                "this PC in BetterCast on %1 to extend its desktop here.")
+            .arg(device.name));
+    recvHint->setWordWrap(true);
+    recvHint->setStyleSheet("font-size: 12px; color: #999;");
+    recvLayout->addWidget(recvHint);
+
+    auto* recvRow = new QHBoxLayout();
+    auto* recvBtn = new QPushButton("Open Receive Screen");
+    recvBtn->setIcon(Icons::icon(Icons::receive()));
+    connect(recvBtn, &QPushButton::clicked, this, [this]() {
+        selectSidebarItem(m_pageReceive);
+    });
+    recvRow->addWidget(recvBtn);
+    recvRow->addStretch();
+    recvLayout->addLayout(recvRow);
+
+    bodyLayout->addWidget(recvCard);
 }
 
 void MainWindow::onDeviceRowSelected(const QString& deviceName) {
