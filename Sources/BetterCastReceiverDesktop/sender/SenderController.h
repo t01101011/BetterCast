@@ -8,6 +8,7 @@ class ScreenCapture;
 class VideoEncoderFF;
 class NetworkSender;
 class VirtualDisplayVDD;
+class InputInjector;
 
 // Orchestrates screen capture → encode → send pipeline.
 // Manages lifecycle and wiring between components.
@@ -55,6 +56,7 @@ private:
     VideoEncoderFF* m_encoder = nullptr;
     NetworkSender* m_network = nullptr;
     VirtualDisplayVDD* m_vdd = nullptr;
+    InputInjector* m_input = nullptr;
     bool m_sending = false;
     bool m_encoderReady = false;
     int m_fps = 30;

@@ -2,10 +2,12 @@
 #include "VirtualDisplayVDD.h"
 #include "VideoEncoderFF.h"
 #include "NetworkSender.h"
+#include "../MainWindow.h"  // LogManager
 #include <QDebug>
 
 #ifdef _WIN32
 #include "ScreenCaptureWin.h"
+#include "InputInjector.h"
 #endif
 // TODO: #include "ScreenCaptureLinux.h" for PipeWire support
 
@@ -65,6 +67,29 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     m_encoder = new VideoEncoderFF(this);
     m_network = new NetworkSender(this);
 
+#ifdef _WIN32
+    // Input travels back over the same socket. Point the injector at the
+    // display we are streaming so normalised coords land there rather than
+    // on the primary monitor.
+    m_input = new InputInjector(this);
+    if (!m_input->setTargetDisplayName(m_displayName)) {
+        LogManager::instance().log(
+            "Sender: No bounds for the streamed display — input will be ignored "
+            "until a display is selected");
+    }
+
+    connect(m_network, &NetworkSender::inputPacket,
+            m_input, &InputInjector::handlePacket);
+
+    // A receiver that loses sync asks for a fresh IDR over the input channel.
+    connect(m_input, &InputInjector::keyframeRequested, this, [this]() {
+        if (m_encoder) m_encoder->requestKeyframe();
+    });
+    connect(m_input, &InputInjector::injectionBlocked, this, [this](const QString& msg) {
+        emit statusChanged("Input blocked: " + msg);
+    });
+#endif
+
     // Wire signals.
     //
     // Capture → encode is a DIRECT connection so both run on the capture thread.
@@ -119,6 +144,10 @@ void SenderController::stopSending() {
         m_network->disconnect();
         delete m_network;
         m_network = nullptr;
+    }
+    if (m_input) {
+        delete m_input;
+        m_input = nullptr;
     }
 
     emit stopped();

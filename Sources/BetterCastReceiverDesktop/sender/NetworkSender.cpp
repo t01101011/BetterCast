@@ -18,8 +18,12 @@ NetworkSender::NetworkSender(QObject* parent)
 
     connect(m_socket, &QTcpSocket::disconnected, this, [this]() {
         qDebug() << "Sender: TCP disconnected";
+        m_rxBuffer.clear();
         emit disconnected();
     });
+
+    // The receiver sends input back over this same socket.
+    connect(m_socket, &QTcpSocket::readyRead, this, &NetworkSender::onReadyRead);
 
     connect(m_socket, &QTcpSocket::errorOccurred, this, [this](QAbstractSocket::SocketError err) {
         if (err == QAbstractSocket::ConnectionRefusedError && m_retryCount < MaxRetries) {
@@ -53,7 +57,35 @@ void NetworkSender::connectTo(const QString& host, uint16_t port) {
     m_host = host;
     m_port = port;
     m_retryCount = 0;
+    m_rxBuffer.clear();
     attemptConnect();
+}
+
+// Reassemble [4B BE length][JSON] frames. TCP gives no message boundaries, so
+// a packet can arrive split across reads or several can arrive coalesced.
+void NetworkSender::onReadyRead() {
+    m_rxBuffer.append(m_socket->readAll());
+
+    while (m_rxBuffer.size() >= 4) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(m_rxBuffer.constData());
+        const uint32_t len = (static_cast<uint32_t>(p[0]) << 24) |
+                             (static_cast<uint32_t>(p[1]) << 16) |
+                             (static_cast<uint32_t>(p[2]) << 8)  |
+                              static_cast<uint32_t>(p[3]);
+
+        if (len == 0 || len > MaxInputPacket) {
+            // Desynchronised — no way to find the next boundary reliably.
+            LogManager::instance().log(
+                QString("Sender: Bad input frame length %1, resetting stream").arg(len));
+            m_rxBuffer.clear();
+            return;
+        }
+
+        if (static_cast<uint32_t>(m_rxBuffer.size()) < 4 + len) return;  // await remainder
+
+        emit inputPacket(m_rxBuffer.mid(4, static_cast<int>(len)));
+        m_rxBuffer.remove(0, static_cast<int>(4 + len));
+    }
 }
 
 void NetworkSender::attemptConnect() {

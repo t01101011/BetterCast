@@ -137,8 +137,11 @@ if(ENABLE_SENDER)
         list(APPEND SOURCES
             sender/ScreenCaptureWin.cpp
             sender/VirtualDisplayVDD.cpp
+            sender/InputInjector.cpp
         )
         list(APPEND HEADERS
+            KeyCodeMap.h
+            sender/InputInjector.h
             sender/ScreenCaptureWin.h
             sender/VirtualDisplayVDD.h
         )

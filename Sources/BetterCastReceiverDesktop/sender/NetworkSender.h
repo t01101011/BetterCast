@@ -7,7 +7,10 @@
 #include <cstdint>
 
 // TCP client that sends video/audio data using BetterCast wire protocol.
-// Format: [4B BE length][1B type (0x01=video, 0x02=audio)][payload]
+// Outbound: [4B BE length][1B type (0x01=video, 0x02=audio)][payload]
+//
+// The same socket carries input back from the receiver, on a different framing:
+// [4B BE length][InputEvent JSON] — no type byte. See InputEvent::toPacket().
 class NetworkSender : public QObject {
     Q_OBJECT
 public:
@@ -25,12 +28,17 @@ signals:
     void connected();
     void disconnected();
     void error(const QString& message);
+    // One complete InputEvent JSON body, length prefix already stripped.
+    void inputPacket(const QByteArray& json);
 
 private:
     void sendPacket(uint8_t type, const QByteArray& payload);
     void attemptConnect();
+    void onReadyRead();
 
     QTcpSocket* m_socket = nullptr;
+    QByteArray m_rxBuffer;   // accumulates partial frames across reads
+    static constexpr int MaxInputPacket = 64 * 1024;  // sanity bound
     QString m_host;
     uint16_t m_port = 0;
     int m_retryCount = 0;

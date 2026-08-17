@@ -1,6 +1,8 @@
 #include "InputHandler.h"
 #include "VideoRenderer.h"
+#include "KeyCodeMap.h"
 
+#include <QDebug>
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QWheelEvent>
@@ -61,6 +63,27 @@ InputHandler::NormalizedPoint InputHandler::normalize(double widgetX, double wid
     return {normX, normY, true};
 }
 
+// The wire carries macOS virtual key codes, because that is what the macOS
+// sender feeds to CGEvent. This previously sent the platform's native code
+// straight through, so on Windows a VK was interpreted as a mac key code and
+// typing produced the wrong characters.
+bool InputHandler::translateKey(const QKeyEvent* ke, uint16_t& codeOut) const {
+#ifdef _WIN32
+    codeOut = KeyCodeMap::vkToMac(static_cast<uint16_t>(ke->nativeVirtualKey()));
+    if (codeOut == 0) {
+        qWarning() << "InputHandler: No mac mapping for VK" << ke->nativeVirtualKey();
+        return false;
+    }
+    return true;
+#else
+    // On macOS nativeVirtualKey() already *is* a CGKeyCode. Elsewhere (Linux)
+    // it is an X11 keycode, which has no correct mapping yet — pass it through
+    // rather than silently dropping every keystroke.
+    codeOut = static_cast<uint16_t>(ke->nativeVirtualKey());
+    return true;
+#endif
+}
+
 bool InputHandler::eventFilter(QObject* obj, QEvent* event) {
     switch (event->type()) {
     case QEvent::MouseMove: {
@@ -111,16 +134,16 @@ bool InputHandler::eventFilter(QObject* obj, QEvent* event) {
     }
     case QEvent::KeyPress: {
         auto* ke = static_cast<QKeyEvent*>(event);
-        // Send Qt native key code — sender will need a mapping table
-        // For now we send the Qt key code directly
-        emit inputEvent(InputEvent(InputEventType::KeyDown, 0, 0,
-                                   static_cast<uint16_t>(ke->nativeVirtualKey())));
+        uint16_t code = 0;
+        if (!translateKey(ke, code)) return false;
+        emit inputEvent(InputEvent(InputEventType::KeyDown, 0, 0, code));
         return false;
     }
     case QEvent::KeyRelease: {
         auto* ke = static_cast<QKeyEvent*>(event);
-        emit inputEvent(InputEvent(InputEventType::KeyUp, 0, 0,
-                                   static_cast<uint16_t>(ke->nativeVirtualKey())));
+        uint16_t code = 0;
+        if (!translateKey(ke, code)) return false;
+        emit inputEvent(InputEvent(InputEventType::KeyUp, 0, 0, code));
         return false;
     }
     default:
