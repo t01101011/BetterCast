@@ -23,27 +23,84 @@ SenderController::SenderController(QObject* parent)
 #endif
 }
 
+SenderController::~SenderController() {
+    stopAll();
+}
+
 void SenderController::setMonitorIndex(int adapterIndex, int outputIndex) {
     m_adapterIndex = adapterIndex;
     m_outputIndex = outputIndex;
 }
 
-SenderController::~SenderController() {
-    stopSending();
+SenderController::Session* SenderController::findSession(const QString& host) const {
+    for (auto* s : m_sessions) {
+        if (s->host == host) return s;
+    }
+    return nullptr;
+}
+
+bool SenderController::isSendingTo(const QString& receiverHost) const {
+    return findSession(receiverHost) != nullptr;
+}
+
+QStringList SenderController::activeReceivers() const {
+    QStringList hosts;
+    for (auto* s : m_sessions) hosts << s->host;
+    return hosts;
+}
+
+QString SenderController::displayForReceiver(const QString& receiverHost) const {
+    auto* s = findSession(receiverHost);
+    return s ? s->displayName : QString();
+}
+
+bool SenderController::displayInUse(const QString& displayName) const {
+    if (displayName.isEmpty()) return false;
+    for (auto* s : m_sessions) {
+        if (s->displayName.compare(displayName, Qt::CaseInsensitive) == 0) return true;
+    }
+    return false;
+}
+
+// Give each receiver a display of its own. Two receivers sharing one display
+// would mirror rather than extend, which is the opposite of the point.
+QString SenderController::claimDisplayFor(const QString& host) {
+    Q_UNUSED(host);
+    if (!m_vdd) return QString();
+
+    // Prefer an unused virtual display.
+    for (const auto& mon : m_vdd->enumerateMonitors()) {
+        if (mon.isVirtual && !displayInUse(mon.name)) return mon.name;
+    }
+
+    // None free — make one, then look again.
+    LogManager::instance().log(
+        "Sender: No spare virtual display for this receiver, creating one...");
+    if (m_vdd->createVirtualDisplay(1920, 1080, 60)) {
+        for (const auto& mon : m_vdd->enumerateMonitors()) {
+            if (mon.isVirtual && !displayInUse(mon.name)) return mon.name;
+        }
+    }
+    return QString();
 }
 
 bool SenderController::startSending(const QString& receiverHost, uint16_t port,
-                                     int fps, int bitrateMbps) {
-    if (m_sending) {
-        qWarning() << "Sender: Already sending";
+                                    int fps, int bitrateMbps,
+                                    const QString& displayName) {
+    if (receiverHost.isEmpty()) {
+        emit error("No receiver address given");
+        return false;
+    }
+    if (findSession(receiverHost)) {
+        LogManager::instance().log("Sender: Already streaming to " + receiverHost);
         return false;
     }
 
-    m_fps = fps;
-    m_bitrateMbps = bitrateMbps;
-
-    // Create screen capture (targeting selected monitor)
-#ifdef _WIN32
+#ifndef _WIN32
+    emit error("Screen capture not yet supported on this platform");
+    emit statusChanged("Sender not available on this platform yet");
+    return false;
+#else
     // A mirrored virtual display shares the primary's framebuffer, so capturing
     // it would just stream a copy of the primary. Fix the topology first.
     if (m_vdd) {
@@ -54,161 +111,203 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
         }
     }
 
-    auto* cap = new ScreenCaptureWin(fps, this);
-    cap->setMonitorIndex(m_adapterIndex, m_outputIndex);
-    cap->setDisplayName(m_displayName);
-    m_capture = cap;
-#else
-    emit error("Screen capture not yet supported on this platform");
-    emit statusChanged("Sender not available on this platform yet");
-    return false;
-#endif
+    auto* s = new Session();
+    s->host = receiverHost;
+    s->port = port;
+    s->fps = fps;
+    s->bitrateMbps = bitrateMbps;
 
-    m_encoder = new VideoEncoderFF(this);
-    m_network = new NetworkSender(this);
-
-#ifdef _WIN32
-    // Input travels back over the same socket. Point the injector at the
-    // display we are streaming so normalised coords land there rather than
-    // on the primary monitor.
-    m_input = new InputInjector(this);
-    if (!m_input->setTargetDisplayName(m_displayName)) {
-        LogManager::instance().log(
-            "Sender: No bounds for the streamed display — input will be ignored "
-            "until a display is selected");
+    // Explicit display wins; then the UI default if free; then claim a spare.
+    s->displayName = displayName;
+    if (s->displayName.isEmpty() && !displayInUse(m_displayName)) {
+        s->displayName = m_displayName;
+        s->adapterIndex = m_adapterIndex;
+        s->outputIndex = m_outputIndex;
+    }
+    if (s->displayName.isEmpty() || displayInUse(s->displayName)) {
+        const QString claimed = claimDisplayFor(receiverHost);
+        if (claimed.isEmpty()) {
+            emit error(QString("No free display for %1. Create another virtual "
+                               "display, or stop an existing stream.").arg(receiverHost));
+            delete s;
+            return false;
+        }
+        s->displayName = claimed;
     }
 
-    connect(m_network, &NetworkSender::inputPacket,
-            m_input, &InputInjector::handlePacket);
+    LogManager::instance().log(
+        QString("Sender: Streaming %1 to %2 (session %3 of %4)")
+            .arg(s->displayName, receiverHost)
+            .arg(m_sessions.size() + 1).arg(m_sessions.size() + 1));
 
-    // A receiver that loses sync asks for a fresh IDR over the input channel.
-    connect(m_input, &InputInjector::keyframeRequested, this, [this]() {
-        if (m_encoder) m_encoder->requestKeyframe();
+    auto* cap = new ScreenCaptureWin(fps, this);
+    cap->setMonitorIndex(s->adapterIndex, s->outputIndex);
+    cap->setDisplayName(s->displayName);
+    s->capture = cap;
+
+    s->encoder = new VideoEncoderFF(this);
+    s->network = new NetworkSender(this);
+
+    // Input travels back over the same socket. Point the injector at this
+    // session's display so events land there, not on the primary.
+    s->input = new InputInjector(this);
+    s->input->setTargetDisplayName(s->displayName);
+
+    // Capture → encode is DIRECT so both run on this session's capture thread.
+    // A queued connection would hop back to the GUI thread and serialise every
+    // session behind Qt painting, which defeats the point of separate pipelines.
+    connect(s->capture, &ScreenCapture::frameCaptured, this,
+            [this, s](const QByteArray& nv12, int w, int h, qint64 pts) {
+                onFrameCaptured(s, nv12, w, h, pts);
+            }, Qt::DirectConnection);
+    connect(s->capture, &ScreenCapture::error, this, &SenderController::error);
+
+    // Encode → network is QUEUED: QTcpSocket is thread-affine to the GUI thread.
+    connect(s->encoder, &VideoEncoderFF::encoded, this,
+            [this, s](const QByteArray& payload) { onEncoded(s, payload); },
+            Qt::QueuedConnection);
+    connect(s->encoder, &VideoEncoderFF::error, this, &SenderController::error);
+
+    connect(s->network, &NetworkSender::connected, this, [this, s]() { onSessionConnected(s); });
+    connect(s->network, &NetworkSender::disconnected, this, [this, s]() { onSessionDisconnected(s); });
+    connect(s->network, &NetworkSender::error, this, &SenderController::error);
+    connect(s->network, &NetworkSender::inputPacket, s->input, &InputInjector::handlePacket);
+
+    connect(s->input, &InputInjector::keyframeRequested, this, [s]() {
+        if (s->encoder) s->encoder->requestKeyframe();
     });
-    connect(m_input, &InputInjector::injectionBlocked, this, [this](const QString& msg) {
+    connect(s->input, &InputInjector::injectionBlocked, this, [this](const QString& msg) {
         emit statusChanged("Input blocked: " + msg);
     });
-#endif
 
-    // Wire signals.
-    //
-    // Capture → encode is a DIRECT connection so both run on the capture thread.
-    // With the default (queued) connection the encode would hop back to the GUI
-    // thread and serialise behind Qt painting, which is where the old pipeline
-    // lost most of its latency.
-    connect(m_capture, &ScreenCapture::frameCaptured,
-            this, &SenderController::onFrameCaptured, Qt::DirectConnection);
-    connect(m_capture, &ScreenCapture::error,
-            this, &SenderController::error);
+    m_sessions.append(s);
 
-    // Encode → network is QUEUED: QTcpSocket is thread-affine and lives on the
-    // GUI thread. Only the compressed payload crosses, so the copy is cheap.
-    connect(m_encoder, &VideoEncoderFF::encoded,
-            this, &SenderController::onEncoded, Qt::QueuedConnection);
-    connect(m_encoder, &VideoEncoderFF::error,
-            this, &SenderController::error);
+    emit statusChanged(QString("Connecting to %1...").arg(receiverHost));
+    s->network->connectTo(receiverHost, port);
 
-    connect(m_network, &NetworkSender::connected,
-            this, &SenderController::onConnected);
-    connect(m_network, &NetworkSender::disconnected,
-            this, &SenderController::onDisconnected);
-    connect(m_network, &NetworkSender::error,
-            this, &SenderController::error);
-
-    // Connect to receiver first
-    emit statusChanged("Connecting to receiver...");
-    m_network->connectTo(receiverHost, port);
-
-    m_sending = true;
-    m_encoderReady = false;
+    emit started(receiverHost);
+    emit sessionsChanged();
     return true;
+#endif
 }
 
-void SenderController::stopSending() {
-    if (!m_sending) return;
+void SenderController::destroySession(Session* s) {
+    if (!s) return;
 
-    m_sending = false;
-    m_encoderReady = false;
-
-    if (m_capture) {
-        m_capture->stop();
-        delete m_capture;
-        m_capture = nullptr;
+    // Order matters: capture->stop() joins the capture thread, so it must
+    // complete before the encoder it calls into is deleted.
+    if (s->capture) {
+        s->capture->stop();
+        delete s->capture;
+        s->capture = nullptr;
     }
-    if (m_encoder) {
-        m_encoder->shutdown();
-        delete m_encoder;
-        m_encoder = nullptr;
+    if (s->encoder) {
+        s->encoder->shutdown();
+        delete s->encoder;
+        s->encoder = nullptr;
     }
-    if (m_network) {
-        m_network->disconnect();
-        delete m_network;
-        m_network = nullptr;
+    if (s->network) {
+        s->network->disconnect();
+        delete s->network;
+        s->network = nullptr;
     }
-    if (m_input) {
-        delete m_input;
-        m_input = nullptr;
+    if (s->input) {
+        delete s->input;
+        s->input = nullptr;
     }
-
-    emit stopped();
-    emit statusChanged("Sender stopped");
+    delete s;
 }
 
-void SenderController::onConnected() {
-    qDebug() << "Sender: Connected to receiver, starting capture...";
-    emit connected();
-    emit statusChanged("Connected — starting screen capture...");
+void SenderController::stopSending(const QString& receiverHost) {
+    auto* s = findSession(receiverHost);
+    if (!s) return;
 
-    if (m_capture && !m_capture->isRunning()) {
-        if (!m_capture->start()) {
-            emit error("Failed to start screen capture");
-            stopSending();
+    m_sessions.removeAll(s);
+    const QString host = s->host;
+    destroySession(s);
+
+    LogManager::instance().log("Sender: Stopped streaming to " + host);
+    emit stopped(host);
+    emit sessionsChanged();
+    emit statusChanged(m_sessions.isEmpty()
+                           ? QString("Sender stopped")
+                           : QString("Streaming to %1 receiver(s)").arg(m_sessions.size()));
+}
+
+void SenderController::stopAll() {
+    const auto sessions = m_sessions;
+    m_sessions.clear();
+    for (auto* s : sessions) {
+        const QString host = s->host;
+        destroySession(s);
+        emit stopped(host);
+    }
+    if (!sessions.isEmpty()) {
+        emit sessionsChanged();
+        emit statusChanged("Sender stopped");
+    }
+}
+
+void SenderController::onSessionConnected(Session* s) {
+    if (!s) return;
+    qDebug() << "Sender: Connected to" << s->host << "— starting capture";
+    emit connected(s->host);
+    emit statusChanged(QString("Connected to %1 — starting capture...").arg(s->host));
+
+    if (s->capture && !s->capture->isRunning()) {
+        if (!s->capture->start()) {
+            emit error(QString("Failed to start screen capture for %1").arg(s->host));
+            const QString host = s->host;
+            QMetaObject::invokeMethod(this, [this, host]() { stopSending(host); },
+                                      Qt::QueuedConnection);
         }
     }
 }
 
-void SenderController::onDisconnected() {
-    qDebug() << "Sender: Disconnected from receiver";
-    emit disconnected();
-    if (m_sending) {
-        stopSending();
-    }
+void SenderController::onSessionDisconnected(Session* s) {
+    if (!s) return;
+    const QString host = s->host;
+    qDebug() << "Sender: Disconnected from" << host;
+    emit disconnected(host);
+    // Tear down on the GUI thread — this can arrive from socket callbacks.
+    QMetaObject::invokeMethod(this, [this, host]() { stopSending(host); },
+                              Qt::QueuedConnection);
 }
 
-void SenderController::onFrameCaptured(const QByteArray& nv12, int width, int height,
-                                       qint64 ptsNanos) {
-    if (!m_encoder || !m_sending) return;
+void SenderController::onFrameCaptured(Session* s, const QByteArray& nv12,
+                                       int width, int height, qint64 ptsNanos) {
+    if (!s || !s->encoder) return;
 
-    // Lazy-init encoder on first frame (captures real resolution)
-    if (!m_encoderReady) {
-        if (!m_encoder->init(width, height, m_fps, m_bitrateMbps)) {
-            emit error("Failed to initialize H.264 encoder");
-            // Do NOT call stopSending() directly — we are on the capture thread
-            // and stopSending() joins that same thread, which would deadlock.
-            // Queue the teardown onto this object's own (GUI) thread instead.
-            QMetaObject::invokeMethod(this, [this]() { stopSending(); },
+    // Lazy-init the encoder on the first frame, which is when the real
+    // resolution of this session's display is known.
+    if (!s->encoderReady) {
+        if (!s->encoder->init(width, height, s->fps, s->bitrateMbps)) {
+            emit error(QString("Failed to initialize H.264 encoder for %1").arg(s->host));
+            // Do NOT tear down inline — we are on this session's capture thread
+            // and stopSending() joins it, which would deadlock.
+            const QString host = s->host;
+            QMetaObject::invokeMethod(this, [this, host]() { stopSending(host); },
                                       Qt::QueuedConnection);
             return;
         }
-        m_encoderReady = true;
-        emit statusChanged(QString("Streaming %1x%2 via %3")
-                               .arg(width).arg(height).arg(m_encoder->encoderName()));
-        // Force first frame to be a keyframe
-        m_encoder->requestKeyframe();
+        s->encoderReady = true;
+        emit statusChanged(QString("Streaming %1x%2 to %3 via %4")
+                               .arg(width).arg(height).arg(s->host, s->encoder->encoderName()));
+        s->encoder->requestKeyframe();
     }
 
-    m_encoder->encode(nv12, width, height, ptsNanos);
+    s->encoder->encode(nv12, width, height, ptsNanos);
 }
 
-void SenderController::onEncoded(const QByteArray& payload) {
-    if (m_network && m_network->isConnected()) {
-        m_network->sendVideo(payload);
+void SenderController::onEncoded(Session* s, const QByteArray& payload) {
+    if (s && s->network && s->network->isConnected()) {
+        s->network->sendVideo(payload);
     }
 }
 
 QString SenderController::encoderInfo() const {
-    if (m_encoder) {
-        return m_encoder->encoderName();
+    for (auto* s : m_sessions) {
+        if (s->encoder && s->encoder->isInitialized()) return s->encoder->encoderName();
     }
     return "Not initialized";
 }

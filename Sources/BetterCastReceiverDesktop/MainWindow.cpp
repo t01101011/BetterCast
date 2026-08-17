@@ -246,14 +246,28 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_senderStatusLabel) m_senderStatusLabel->setText("Error: " + msg);
         LogManager::instance().log("Sender error: " + msg);
     });
-    connect(m_sender, &SenderController::connected, this, [this]() {
-        if (m_senderStatusLabel) m_senderStatusLabel->setText("Sending screen...");
-        LogManager::instance().log("Sender: Connected and streaming");
+    connect(m_sender, &SenderController::connected, this, [this](const QString& host) {
+        LogManager::instance().log(QString("Sender: Connected and streaming to %1 (%2)")
+                                       .arg(host, m_sender->displayForReceiver(host)));
+        // Mark the device row connected so the sidebar shows it in green.
+        const int idx = indexOfDevice(host);
+        if (idx >= 0) { m_devices[idx].connected = true; rebuildSidebar(); }
     });
-    connect(m_sender, &SenderController::stopped, this, [this]() {
-        if (m_sendBtn) m_sendBtn->setEnabled(true);
-        if (m_stopSendBtn) m_stopSendBtn->setEnabled(false);
+    connect(m_sender, &SenderController::stopped, this, [this](const QString& host) {
+        const int idx = indexOfDevice(host);
+        if (idx >= 0) { m_devices[idx].connected = false; rebuildSidebar(); }
+    });
+    // Several receivers can stream at once, so the buttons reflect the total
+    // rather than a single on/off state.
+    connect(m_sender, &SenderController::sessionsChanged, this, [this]() {
+        const int n = m_sender->sessionCount();
+        if (m_stopSendBtn) m_stopSendBtn->setEnabled(n > 0);
+        if (m_sendBtn) m_sendBtn->setEnabled(true);          // more receivers may be added
         if (m_sendHostEdit) m_sendHostEdit->setEnabled(true);
+        if (m_senderStatusLabel && n > 0) {
+            m_senderStatusLabel->setText(
+                QString("Streaming to %1 receiver%2").arg(n).arg(n == 1 ? "" : "s"));
+        }
     });
 
     // mDNS browsing for receiver discovery
@@ -1346,11 +1360,13 @@ void MainWindow::onSendScreenClicked() {
                                        .arg(adapterIdx).arg(outputIdx));
     }
 
-    m_sendBtn->setEnabled(false);
+    if (m_sender->isSendingTo(host)) {
+        m_senderStatusLabel->setText("Already streaming to " + host);
+        m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #ff9800;");
+        return;
+    }
+
     m_stopSendBtn->setEnabled(true);
-    m_sendHostEdit->setEnabled(false);
-    m_fpsSpinBox->setEnabled(false);
-    m_bitrateSpinBox->setEnabled(false);
     m_senderStatusLabel->setText("Starting sender...");
     m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #4da6ff;");
 
@@ -1358,7 +1374,13 @@ void MainWindow::onSendScreenClicked() {
     int bitrate = m_bitrateSpinBox->value();
     LogManager::instance().log(QString("Starting sender to %1 at %2 FPS, %3 Mbps")
                                    .arg(host).arg(fps).arg(bitrate));
-    m_sender->startSending(host, m_selectedReceiverPort, fps, bitrate);
+
+    // Empty display name lets the controller claim a virtual display this
+    // receiver does not already share with another session.
+    const QString chosenDisplay = m_monitorCombo && m_monitorCombo->currentIndex() >= 0
+        ? m_monitorCombo->currentData().toMap().value("displayName").toString()
+        : QString();
+    m_sender->startSending(host, m_selectedReceiverPort, fps, bitrate, chosenDisplay);
 }
 
 void MainWindow::onCreateVirtualDisplay() {
@@ -1489,19 +1511,44 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
     cardLayout->addWidget(hint);
 
     auto* btnRow = new QHBoxLayout();
-    auto* sendBtn = new QPushButton("Send Screen Here");
-    sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
-    sendBtn->setStyleSheet(
-        "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
-        "padding: 9px 20px; border-radius: 6px; border: none; }"
-        "QPushButton:hover { background-color: #1a88e0; }");
-    connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
-        if (m_sendHostEdit) m_sendHostEdit->setText(device.host);
-        m_selectedReceiverPort = device.port;
-        selectSidebarItem(m_pageSend);   // the Send page owns monitor + quality
-        onSendScreenClicked();
-    });
-    btnRow->addWidget(sendBtn);
+    const bool streaming = m_sender && m_sender->isSendingTo(device.host);
+
+    if (streaming) {
+        auto* activeLabel = new QLabel(
+            QString("Streaming %1 to this device")
+                .arg(m_sender->displayForReceiver(device.host)));
+        activeLabel->setStyleSheet("font-size: 12px; color: #4caf50;");
+        cardLayout->addWidget(activeLabel);
+
+        auto* stopBtn = new QPushButton("Stop Streaming Here");
+        stopBtn->setStyleSheet(
+            "QPushButton { background-color: #d32f2f; color: white; font-weight: bold; "
+            "padding: 9px 20px; border-radius: 6px; border: none; }"
+            "QPushButton:hover { background-color: #e34a4a; }");
+        connect(stopBtn, &QPushButton::clicked, this, [this, device]() {
+            m_sender->stopSending(device.host);   // other receivers keep streaming
+            onDeviceRowSelected(device.name);     // refresh this page
+        });
+        btnRow->addWidget(stopBtn);
+    } else {
+        auto* sendBtn = new QPushButton("Send Screen Here");
+        sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
+        sendBtn->setStyleSheet(
+            "QPushButton { background-color: #0078D4; color: white; font-weight: bold; "
+            "padding: 9px 20px; border-radius: 6px; border: none; }"
+            "QPushButton:hover { background-color: #1a88e0; }");
+        connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
+            if (m_sendHostEdit) m_sendHostEdit->setText(device.host);
+            m_selectedReceiverPort = device.port;
+            // Empty display: the controller claims one not already in use, so a
+            // second receiver gets its own screen rather than mirroring the first.
+            const int fps = m_fpsSpinBox ? m_fpsSpinBox->value() : 60;
+            const int bitrate = m_bitrateSpinBox ? m_bitrateSpinBox->value() : 20;
+            m_sender->startSending(device.host, device.port, fps, bitrate, QString());
+            onDeviceRowSelected(device.name);
+        });
+        btnRow->addWidget(sendBtn);
+    }
 
     auto* configureBtn = new QPushButton("Configure\xE2\x80\xA6");
     connect(configureBtn, &QPushButton::clicked, this, [this, device]() {
@@ -1654,7 +1701,7 @@ void MainWindow::onMonitorSelected(int index) {
 }
 
 void MainWindow::onStopSendingClicked() {
-    m_sender->stopSending();
+    m_sender->stopAll();
     m_senderStatusLabel->setText("Sender stopped");
     m_senderStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
     m_fpsSpinBox->setEnabled(true);

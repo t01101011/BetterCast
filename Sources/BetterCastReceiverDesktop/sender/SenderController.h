@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QVector>
 #include <cstdint>
 
 class ScreenCapture;
@@ -10,22 +11,39 @@ class NetworkSender;
 class VirtualDisplayVDD;
 class InputInjector;
 
-// Orchestrates screen capture → encode → send pipeline.
-// Manages lifecycle and wiring between components.
-// Optionally creates a virtual display via VDD before streaming.
+// Orchestrates capture → encode → send, once per connected receiver.
+//
+// Each receiver gets its own virtual display, capture, encoder and socket —
+// matching the macOS sender, where two connected devices mean two extra
+// screens rather than the same screen mirrored twice. Sessions are fully
+// independent: one receiver disconnecting or failing to encode does not
+// disturb the others.
 class SenderController : public QObject {
     Q_OBJECT
 public:
     explicit SenderController(QObject* parent = nullptr);
     ~SenderController() override;
 
-    // Start sender mode: capture screen, encode, and stream to receiver
+    // Start streaming to one receiver. `displayName` selects the monitor to
+    // capture (e.g. "\\\\.\\DISPLAY21"); when empty the controller claims the
+    // next virtual display not already in use by another session.
     bool startSending(const QString& receiverHost, uint16_t port = 51820,
-                      int fps = 30, int bitrateMbps = 8);
-    void stopSending();
-    bool isSending() const { return m_sending; }
+                      int fps = 30, int bitrateMbps = 8,
+                      const QString& displayName = QString());
 
-    // Monitor selection (adapter + output index from DXGI enumeration)
+    // Stop one receiver, or every receiver.
+    void stopSending(const QString& receiverHost);
+    void stopAll();
+
+    bool isSending() const { return !m_sessions.isEmpty(); }
+    bool isSendingTo(const QString& receiverHost) const;
+    int  sessionCount() const { return m_sessions.size(); }
+    QStringList activeReceivers() const;
+
+    // Display used by a given receiver, for the UI to show what goes where.
+    QString displayForReceiver(const QString& receiverHost) const;
+
+    // Default monitor for the next session started without an explicit display.
     void setMonitorIndex(int adapterIndex, int outputIndex);
     void setDisplayName(const QString& name) { m_displayName = name; }
 
@@ -35,32 +53,50 @@ public:
     QString encoderInfo() const;
 
 signals:
-    void started();
-    void stopped();
-    void connected();
-    void disconnected();
+    void started(const QString& receiverHost);
+    void stopped(const QString& receiverHost);
+    void connected(const QString& receiverHost);
+    void disconnected(const QString& receiverHost);
     void error(const QString& message);
     void statusChanged(const QString& status);
-
-private slots:
-    // Runs on the capture thread (direct connection) — encoding happens there,
-    // not on the GUI thread. Touch only encoder state from here.
-    void onFrameCaptured(const QByteArray& nv12, int width, int height, qint64 ptsNanos);
-    // Runs on the GUI thread (queued) — m_network's socket is thread-affine.
-    void onEncoded(const QByteArray& payload);
-    void onConnected();
-    void onDisconnected();
+    // Emitted whenever a session starts or ends, so the UI can refresh counts.
+    void sessionsChanged();
 
 private:
-    ScreenCapture* m_capture = nullptr;
-    VideoEncoderFF* m_encoder = nullptr;
-    NetworkSender* m_network = nullptr;
+    // One receiver's pipeline. Owned by the controller; torn down as a unit.
+    struct Session {
+        QString host;
+        uint16_t port = 51820;
+        QString displayName;
+        int adapterIndex = 0;
+        int outputIndex = 0;
+        int fps = 30;
+        int bitrateMbps = 8;
+        bool encoderReady = false;
+
+        ScreenCapture* capture = nullptr;
+        VideoEncoderFF* encoder = nullptr;
+        NetworkSender* network = nullptr;
+        InputInjector* input = nullptr;
+    };
+
+    Session* findSession(const QString& host) const;
+    void destroySession(Session* s);
+    // Choose a virtual display no other session is streaming, creating one if
+    // none is free. Returns an empty string when nothing suitable exists.
+    QString claimDisplayFor(const QString& host);
+    bool displayInUse(const QString& displayName) const;
+
+    void onFrameCaptured(Session* s, const QByteArray& nv12, int width, int height,
+                         qint64 ptsNanos);
+    void onEncoded(Session* s, const QByteArray& payload);
+    void onSessionConnected(Session* s);
+    void onSessionDisconnected(Session* s);
+
+    QVector<Session*> m_sessions;
     VirtualDisplayVDD* m_vdd = nullptr;
-    InputInjector* m_input = nullptr;
-    bool m_sending = false;
-    bool m_encoderReady = false;
-    int m_fps = 30;
-    int m_bitrateMbps = 8;
+
+    // Defaults applied to the next session started without explicit values.
     int m_adapterIndex = 0;
     int m_outputIndex = 0;
     QString m_displayName;
