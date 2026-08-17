@@ -62,6 +62,26 @@ public:
     // Find the output index for a virtual display
     int findVirtualDisplayOutput() const;
 
+    // The four modes Win+P offers. Windows applies these through one call, so
+    // exposing them in-app saves a trip to Display Settings.
+    enum class Topology { Extend, Duplicate, InternalOnly, ExternalOnly };
+    bool applyTopology(Topology mode);
+    static QString topologyName(Topology mode);
+
+    // A root-enumerated VDD device node. Each node contributes one virtual
+    // monitor — they are NOT described by the settings XML, which is why
+    // rewriting that file cannot remove them.
+    struct VddDevice {
+        QString instanceId;    // e.g. "ROOT\\DISPLAY\\0001"
+        QString friendlyName;
+    };
+    QVector<VddDevice> enumerateVddDevices() const;
+
+    // Remove VDD device nodes, keeping the first `keep` of them.
+    // Requires administrator rights, so this triggers a single UAC prompt
+    // rather than elevating the whole app.
+    bool removeVddDevices(int keep = 0);
+
     // Display topology
     TopologyState queryTopology() const;
 

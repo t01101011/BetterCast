@@ -28,10 +28,13 @@
 #include <SetupAPI.h>
 #include <devguid.h>
 #include <cfgmgr32.h>
+#include <shellapi.h>   // ShellExecuteEx, for the elevated removal helper
+#include <string>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "user32.lib")   // CCD: QueryDisplayConfig / SetDisplayConfig
+#pragma comment(lib, "shell32.lib")  // ShellExecuteEx
 
 #ifndef DISPLAYCONFIG_PATH_MODE_IDX_INVALID
 #define DISPLAYCONFIG_PATH_MODE_IDX_INVALID 0xffffffff
@@ -92,6 +95,40 @@ bool queryPaths(QVector<DISPLAYCONFIG_PATH_INFO>& paths,
         if (r != ERROR_INSUFFICIENT_BUFFER) return false;  // only the race is retryable
     }
     return false;
+}
+
+// What Windows calls the display adapter and monitor behind "\\.\DISPLAYn".
+//
+// DXGI_ADAPTER_DESC1.Description is the *rendering* adapter, and an indirect
+// display renders on a real GPU — so a VDD monitor reports "NVIDIA GeForce ..."
+// or "Intel(R) UHD Graphics" there and is indistinguishable from a physical one.
+// EnumDisplayDevices reports the display adapter instead, which is the VDD.
+// Observed: DISPLAY21/24/25 were labelled NVIDIA/Intel and lost their [Virtual]
+// tag as soon as they attached, while the log had already identified all four as
+// "Virtual Display Driver".
+QString displayDeviceStrings(const QString& deviceName) {
+    QString combined;
+
+    DISPLAY_DEVICEW dd = {};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
+        if (deviceName.compare(QString::fromWCharArray(dd.DeviceName),
+                               Qt::CaseInsensitive) == 0) {
+            combined += QString::fromWCharArray(dd.DeviceString);
+            break;
+        }
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+
+    // Also the monitor hanging off that adapter, e.g. "Generic PnP Monitor".
+    DISPLAY_DEVICEW mon = {};
+    mon.cb = sizeof(mon);
+    if (EnumDisplayDevicesW(reinterpret_cast<LPCWSTR>(deviceName.utf16()), 0, &mon, 0)) {
+        combined += " " + QString::fromWCharArray(mon.DeviceString);
+        combined += " " + QString::fromWCharArray(mon.DeviceID);
+    }
+    return combined;
 }
 
 QString sourceKey(const DISPLAYCONFIG_PATH_INFO& p) {
@@ -604,17 +641,47 @@ VirtualDisplayVDD::TopologyState VirtualDisplayVDD::queryTopology() const {
     return st;
 }
 
-bool VirtualDisplayVDD::applyExtendTopology() {
+QString VirtualDisplayVDD::topologyName(Topology mode) {
+    switch (mode) {
+        case Topology::Extend:       return QStringLiteral("Extend");
+        case Topology::Duplicate:    return QStringLiteral("Duplicate");
+        case Topology::InternalOnly: return QStringLiteral("PC screen only");
+        case Topology::ExternalOnly: return QStringLiteral("Second screen only");
+    }
+    return QStringLiteral("Unknown");
+}
+
+bool VirtualDisplayVDD::applyTopology(Topology mode) {
 #ifdef _WIN32
-    // Exactly what Win+P → Extend does: restore the saved extend topology.
-    LONG r = SetDisplayConfig(0, nullptr, 0, nullptr, SDC_TOPOLOGY_EXTEND | SDC_APPLY);
+    // These are exactly the four Win+P projection modes. Windows restores the
+    // saved topology for whichever is requested.
+    UINT32 flag = SDC_TOPOLOGY_EXTEND;
+    switch (mode) {
+        case Topology::Extend:       flag = SDC_TOPOLOGY_EXTEND;   break;
+        case Topology::Duplicate:    flag = SDC_TOPOLOGY_CLONE;    break;
+        case Topology::InternalOnly: flag = SDC_TOPOLOGY_INTERNAL; break;
+        case Topology::ExternalOnly: flag = SDC_TOPOLOGY_EXTERNAL; break;
+    }
+
+    LONG r = SetDisplayConfig(0, nullptr, 0, nullptr, flag | SDC_APPLY);
     if (r == ERROR_SUCCESS) {
-        VDD_LOG("VDD: Applied SDC_TOPOLOGY_EXTEND");
+        VDD_LOG("VDD: Applied topology " + topologyName(mode));
+        emit statusChanged("Display mode: " + topologyName(mode));
         return true;
     }
-    VDD_LOG(QString("VDD: SDC_TOPOLOGY_EXTEND failed (code %1)").arg(r));
+    VDD_LOG(QString("VDD: Topology %1 failed (code %2)").arg(topologyName(mode)).arg(r));
+    if (mode != Topology::Extend) {
+        emit error(QString("Windows refused the '%1' display mode (code %2).")
+                       .arg(topologyName(mode)).arg(r));
+    }
+#else
+    Q_UNUSED(mode);
 #endif
     return false;
+}
+
+bool VirtualDisplayVDD::applyExtendTopology() {
+    return applyTopology(Topology::Extend);
 }
 
 bool VirtualDisplayVDD::applyExtendTopologySupplied() {
@@ -934,25 +1001,39 @@ bool VirtualDisplayVDD::removeVirtualDisplay(int index) {
     return true;
 }
 
+// True if Windows still reports a virtual monitor after a removal attempt.
+static bool anyVirtualMonitorLeft(const QVector<VirtualDisplayVDD::MonitorInfo>& mons) {
+    for (const auto& m : mons) {
+        if (m.isVirtual) return true;
+    }
+    return false;
+}
+
 bool VirtualDisplayVDD::removeAllVirtualDisplays() {
     if (!m_vddInstalled) return false;
 
-    // Try named pipe
-    if (tryNamedPipe("{\"command\":\"removeAll\"}")) {
-        m_createdDisplayCount = 0;
-        emit virtualDisplayRemoved();
-        return true;
-    }
+    // Preferred: ask the driver directly.
+    tryNamedPipe("{\"command\":\"removeAll\"}");
 
-    // Fallback: write empty display list
+    // Then the settings file, for versions driven by it.
     if (writeVddSettings({})) {
         notifyDriverRefresh();
+    }
+
+    // Verify rather than assume. On MttVDD builds each monitor comes from a
+    // root-enumerated device node and the settings file is empty, so both
+    // routes above report success while every monitor is still attached —
+    // which is why "Remove" appeared to do nothing.
+    QThread::msleep(500);
+    if (!anyVirtualMonitorLeft(enumerateMonitors()) && enumerateVddDevices().isEmpty()) {
         m_createdDisplayCount = 0;
         emit virtualDisplayRemoved();
+        emit statusChanged("Virtual displays removed");
         return true;
     }
 
-    return false;
+    VDD_LOG("VDD: Monitors persist after pipe/settings removal — removing device nodes");
+    return removeVddDevices(0);
 }
 
 int VirtualDisplayVDD::virtualDisplayCount() const {
@@ -996,14 +1077,14 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
                 info.width = outputDesc.DesktopCoordinates.right - outputDesc.DesktopCoordinates.left;
                 info.height = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
 
-                // Detect virtual displays by adapter name patterns
-                QString lowerAdapter = adapterName.toLower();
-                info.isVirtual = lowerAdapter.contains("virtual") ||
-                                 lowerAdapter.contains("indirect") ||
-                                 lowerAdapter.contains("idd") ||
-                                 lowerAdapter.contains("vdd") ||
-                                 lowerAdapter.contains("mttvdd") ||
-                                 lowerAdapter.contains("mtt");
+                // Ask Windows what drives this display rather than trusting the
+                // DXGI adapter description, which names the rendering GPU.
+                const QString devStrings = displayDeviceStrings(info.name);
+                info.isVirtual = looksVirtual(adapterName) || looksVirtual(devStrings);
+                if (info.isVirtual && !looksVirtual(adapterName)) {
+                    // Show the useful name in the picker, not the host GPU.
+                    info.adapterName = "Virtual Display Driver";
+                }
 
                 result.append(info);
                 output->Release();
@@ -1091,6 +1172,116 @@ int VirtualDisplayVDD::findVirtualDisplayOutput() const {
         }
     }
     return -1;
+}
+
+// ─── VDD Device Nodes ─────────────────────────────────────────────────────────
+
+QVector<VirtualDisplayVDD::VddDevice> VirtualDisplayVDD::enumerateVddDevices() const {
+    QVector<VddDevice> devices;
+#ifdef _WIN32
+    HDEVINFO devInfo = SetupDiGetClassDevsW(&GUID_DEVCLASS_DISPLAY, nullptr, nullptr,
+                                            DIGCF_PRESENT);
+    if (devInfo == INVALID_HANDLE_VALUE) return devices;
+
+    SP_DEVINFO_DATA devData = {};
+    devData.cbSize = sizeof(devData);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(devInfo, i, &devData); i++) {
+        wchar_t instanceId[MAX_DEVICE_ID_LEN] = {};
+        if (!SetupDiGetDeviceInstanceIdW(devInfo, &devData, instanceId,
+                                         MAX_DEVICE_ID_LEN, nullptr)) {
+            continue;
+        }
+        const QString id = QString::fromWCharArray(instanceId);
+
+        // VDD nodes are root-enumerated; a real GPU sits on PCI.
+        if (!id.startsWith("ROOT\\", Qt::CaseInsensitive)) continue;
+
+        wchar_t friendly[512] = {};
+        QString name;
+        if (SetupDiGetDeviceRegistryPropertyW(devInfo, &devData, SPDRP_FRIENDLYNAME,
+                                              nullptr, reinterpret_cast<PBYTE>(friendly),
+                                              sizeof(friendly), nullptr) ||
+            SetupDiGetDeviceRegistryPropertyW(devInfo, &devData, SPDRP_DEVICEDESC,
+                                              nullptr, reinterpret_cast<PBYTE>(friendly),
+                                              sizeof(friendly), nullptr)) {
+            name = QString::fromWCharArray(friendly);
+        }
+
+        if (looksVirtual(id) || looksVirtual(name)) {
+            devices.append({id, name});
+        }
+        devData = {};
+        devData.cbSize = sizeof(devData);
+    }
+    SetupDiDestroyDeviceInfoList(devInfo);
+#endif
+    return devices;
+}
+
+bool VirtualDisplayVDD::removeVddDevices(int keep) {
+#ifdef _WIN32
+    const auto devices = enumerateVddDevices();
+    if (devices.isEmpty()) {
+        VDD_LOG("VDD: No virtual display device nodes found");
+        return false;
+    }
+    if (devices.size() <= keep) {
+        VDD_LOG(QString("VDD: %1 device node(s) present, keeping %2 — nothing to remove")
+                    .arg(devices.size()).arg(keep));
+        return true;
+    }
+
+    // One command removing every stale node, so the user sees a single UAC
+    // prompt instead of one per display.
+    QStringList parts;
+    for (int i = keep; i < devices.size(); i++) {
+        parts << QString("pnputil /remove-device \"%1\"").arg(devices[i].instanceId);
+        VDD_LOG("VDD: Will remove " + devices[i].instanceId + " (" + devices[i].friendlyName + ")");
+    }
+    const QString args = "/c " + parts.join(" & ");
+
+    emit statusChanged(QString("Removing %1 virtual display(s) — approve the "
+                               "administrator prompt").arg(parts.size()));
+
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+    sei.lpVerb = L"runas";          // elevate just this action, not the whole app
+    sei.lpFile = L"cmd.exe";
+    const std::wstring wargs = args.toStdWString();
+    sei.lpParameters = wargs.c_str();
+    sei.nShow = SW_HIDE;
+
+    if (!ShellExecuteExW(&sei)) {
+        const DWORD err = GetLastError();
+        if (err == ERROR_CANCELLED) {
+            VDD_LOG("VDD: Removal cancelled — administrator approval declined");
+            emit error("Removing virtual displays needs administrator approval.");
+        } else {
+            VDD_LOG(QString("VDD: ShellExecuteEx failed (error %1)").arg(err));
+            emit error(QString("Could not launch the removal helper (error %1).").arg(err));
+        }
+        return false;
+    }
+
+    if (sei.hProcess) {
+        WaitForSingleObject(sei.hProcess, 60000);
+        DWORD exitCode = 1;
+        GetExitCodeProcess(sei.hProcess, &exitCode);
+        CloseHandle(sei.hProcess);
+        VDD_LOG(QString("VDD: Removal helper exit code %1").arg(exitCode));
+    }
+
+    const int remaining = enumerateVddDevices().size();
+    VDD_LOG(QString("VDD: %1 virtual display device node(s) remain").arg(remaining));
+    m_createdDisplayCount = remaining;
+    emit virtualDisplayRemoved();
+    emit statusChanged(QString("%1 virtual display(s) remaining").arg(remaining));
+    return remaining <= keep;
+#else
+    Q_UNUSED(keep);
+    return false;
+#endif
 }
 
 // ─── VDD Settings File ────────────────────────────────────────────────────────

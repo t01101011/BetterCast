@@ -565,7 +565,8 @@ void MainWindow::setupSendPage() {
             m_recheckVddBtn->setVisible(false);
             m_vddResolutionCombo->setEnabled(true);
             m_createVddBtn->setEnabled(true);
-            if (m_extendBtn) m_extendBtn->setEnabled(true);
+            if (m_topologyCombo) m_topologyCombo->setEnabled(true);
+            if (m_applyTopologyBtn) m_applyTopologyBtn->setEnabled(true);
         } else {
             m_vddStatusLabel->setText(
                 "Still not detected — make sure VDD is installed and try restarting the app");
@@ -609,6 +610,9 @@ void MainWindow::setupSendPage() {
     vddBtnRow->addWidget(m_createVddBtn);
 
     m_removeVddBtn = new QPushButton("Remove");
+    m_removeVddBtn->setToolTip("Remove all virtual displays. Displays created by the "
+                               "installer are device nodes, so this asks for "
+                               "administrator approval once.");
     m_removeVddBtn->setEnabled(false);
     m_removeVddBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: #ccc; padding: 8px 18px; "
@@ -618,17 +622,30 @@ void MainWindow::setupSendPage() {
     connect(m_removeVddBtn, &QPushButton::clicked, this, &MainWindow::onRemoveVirtualDisplay);
     vddBtnRow->addWidget(m_removeVddBtn);
 
-    m_extendBtn = new QPushButton("Extend Displays");
-    m_extendBtn->setToolTip("Switch Windows out of mirrored mode and place the "
-                            "virtual display beside your primary monitor");
-    m_extendBtn->setEnabled(vddInstalled);
-    m_extendBtn->setStyleSheet(
+    // The four Win+P projection modes, so users need not leave the app.
+    m_topologyCombo = new QComboBox();
+    m_topologyCombo->addItem("Extend",
+        static_cast<int>(VirtualDisplayVDD::Topology::Extend));
+    m_topologyCombo->addItem("Duplicate",
+        static_cast<int>(VirtualDisplayVDD::Topology::Duplicate));
+    m_topologyCombo->addItem("PC screen only",
+        static_cast<int>(VirtualDisplayVDD::Topology::InternalOnly));
+    m_topologyCombo->addItem("Second screen only",
+        static_cast<int>(VirtualDisplayVDD::Topology::ExternalOnly));
+    m_topologyCombo->setToolTip("Same options as Win+P, applied without opening "
+                                "Display Settings");
+    m_topologyCombo->setEnabled(vddInstalled);
+    vddBtnRow->addWidget(m_topologyCombo);
+
+    m_applyTopologyBtn = new QPushButton("Apply");
+    m_applyTopologyBtn->setEnabled(vddInstalled);
+    m_applyTopologyBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: #ccc; padding: 8px 18px; "
         "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: #666; }");
-    connect(m_extendBtn, &QPushButton::clicked, this, &MainWindow::onExtendDisplays);
-    vddBtnRow->addWidget(m_extendBtn);
+    connect(m_applyTopologyBtn, &QPushButton::clicked, this, &MainWindow::onExtendDisplays);
+    vddBtnRow->addWidget(m_applyTopologyBtn);
 
     vddBtnRow->addStretch();
     vddLayout->addLayout(vddBtnRow);
@@ -1330,28 +1347,34 @@ void MainWindow::onRemoveVirtualDisplay() {
 }
 
 void MainWindow::onExtendDisplays() {
-    if (!m_sender || !m_sender->vdd()) return;
+    if (!m_sender || !m_sender->vdd() || !m_topologyCombo) return;
 
-    m_extendBtn->setEnabled(false);
-    m_vddStatusLabel->setText("Checking display topology...");
+    const auto mode = static_cast<VirtualDisplayVDD::Topology>(
+        m_topologyCombo->currentData().toInt());
+    const QString modeName = m_topologyCombo->currentText();
+
+    m_applyTopologyBtn->setEnabled(false);
+    m_vddStatusLabel->setText("Applying " + modeName + "...");
     m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #4da6ff;");
+    LogManager::instance().log("Applying display mode: " + modeName);
 
     // SetDisplayConfig blocks while the mode change settles — keep it off the UI thread.
-    std::thread([this]() {
+    std::thread([this, mode, modeName]() {
         auto* vdd = m_sender->vdd();
-        const bool wasCloned = vdd->queryTopology().anyCloned;
-        const bool ok = vdd->ensureExtendedTopology();
+        // Extend goes through ensureExtendedTopology so it also verifies the
+        // result and repositions the virtual display; the other modes are a
+        // straight projection change.
+        const bool ok = (mode == VirtualDisplayVDD::Topology::Extend)
+                            ? vdd->ensureExtendedTopology()
+                            : vdd->applyTopology(mode);
 
-        QMetaObject::invokeMethod(this, [this, ok, wasCloned]() {
-            m_extendBtn->setEnabled(true);
-            if (ok && wasCloned) {
-                m_vddStatusLabel->setText("Displays extended");
+        QMetaObject::invokeMethod(this, [this, ok, modeName]() {
+            m_applyTopologyBtn->setEnabled(true);
+            if (ok) {
+                m_vddStatusLabel->setText("Display mode: " + modeName);
                 m_vddStatusLabel->setStyleSheet("font-size: 13px; color: #4caf50;");
-            } else if (ok) {
-                m_vddStatusLabel->setText("Already extended");
-                m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #888;");
             } else {
-                m_vddStatusLabel->setText("Could not extend — see logs");
+                m_vddStatusLabel->setText("Could not apply " + modeName + " — see logs");
                 m_vddStatusLabel->setStyleSheet("font-size: 12px; color: #d32f2f;");
             }
             onRefreshMonitors();
@@ -1392,7 +1415,30 @@ void MainWindow::onRefreshMonitors() {
         m_monitorCombo->addItem(label, data);
     }
 
-    LogManager::instance().log(QString("Found %1 monitor(s)").arg(monitors.size()));
+    // Default to a virtual display when one exists. The combo used to land on
+    // index 0 — the primary — so anyone with pre-existing virtual displays
+    // silently streamed their own main screen and it looked like mirroring.
+    int firstVirtual = -1;
+    int virtualCount = 0;
+    for (int i = 0; i < m_monitorCombo->count(); i++) {
+        if (m_monitorCombo->itemData(i).toMap().value("virtual", false).toBool()) {
+            if (firstVirtual < 0) firstVirtual = i;
+            virtualCount++;
+        }
+    }
+    if (firstVirtual >= 0) m_monitorCombo->setCurrentIndex(firstVirtual);
+
+    // Remove is meaningful whenever any virtual display is present, including
+    // ones left behind by earlier installs.
+    if (m_removeVddBtn) m_removeVddBtn->setEnabled(virtualCount > 0);
+
+    LogManager::instance().log(QString("Found %1 monitor(s), %2 virtual")
+                                   .arg(monitors.size()).arg(virtualCount));
+    if (virtualCount > 1) {
+        LogManager::instance().log(
+            QString("Note: %1 virtual displays present. Extras are usually left over "
+                    "from repeated installs — use Remove to clear them.").arg(virtualCount));
+    }
 }
 
 void MainWindow::onMonitorSelected(int index) {

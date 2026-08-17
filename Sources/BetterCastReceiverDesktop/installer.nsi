@@ -110,9 +110,23 @@ Section "Virtual Display Driver (VDD)" SecVDD
     ; Check if any VDD driver files were actually copied
     IfFileExists "$INSTDIR\VirtualDisplayDriver\MttVDD.inf" 0 try_generic_inf
 
-    ; Install MttVDD driver using devcon (creates device node for IDD drivers)
     IfFileExists "$INSTDIR\VirtualDisplayDriver\devcon.exe" 0 try_pnputil
-    DetailPrint "Installing VDD driver via devcon..."
+
+    ; "devcon install" ALWAYS creates a new root-enumerated device node — it never
+    ; checks whether one already exists. Running the installer N times therefore
+    ; produced N virtual monitors (reported: ROOT\DISPLAY\0000-0003 after four runs),
+    ; which then show up as extra displays and confuse monitor selection.
+    ;
+    ; "devcon update" targets the nodes that already exist instead of adding one, so
+    ; try it first and only fall back to install when there is nothing to update.
+    DetailPrint "Updating any existing VDD device node..."
+    nsExec::ExecToLog '"$INSTDIR\VirtualDisplayDriver\devcon.exe" update "$INSTDIR\VirtualDisplayDriver\MttVDD.inf" Root\MttVDD'
+    Pop $0
+    DetailPrint "devcon update exit code: $0"
+    StrCmp $0 "0" vdd_done      ; updated in place — no new monitor created
+    StrCmp $0 "1" vdd_done      ; updated, reboot required
+
+    DetailPrint "No existing device node — installing VDD driver via devcon..."
     nsExec::ExecToLog '"$INSTDIR\VirtualDisplayDriver\devcon.exe" install "$INSTDIR\VirtualDisplayDriver\MttVDD.inf" Root\MttVDD'
     Pop $0
     DetailPrint "devcon exit code: $0"
@@ -189,10 +203,27 @@ Section "Uninstall"
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="BetterCast Streaming"'
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="BetterCast App"'
 
-    ; Remove VDD driver (best effort)
-    IfFileExists "$INSTDIR\VirtualDisplayDriver\VirtualDisplayDriver.inf" 0 skip_vdd_remove
+    ; Remove VDD device nodes, then the driver (best effort).
+    ;
+    ; This used to test for VirtualDisplayDriver.inf, but the file actually shipped
+    ; is MttVDD.inf — so the test never matched, the branch was always skipped, and
+    ; uninstalling left every device node behind. Combined with install creating a
+    ; fresh node each time, install/uninstall cycles only ever accumulated monitors.
+    ;
+    ; Removing the device nodes has to come first: deleting the driver package while
+    ; nodes still reference it leaves them present but broken.
+    IfFileExists "$INSTDIR\VirtualDisplayDriver\MttVDD.inf" 0 skip_vdd_remove
     DetailPrint "Removing Virtual Display Driver..."
-    nsExec::ExecToLog 'pnputil /delete-driver "$INSTDIR\VirtualDisplayDriver\VirtualDisplayDriver.inf" /uninstall'
+
+    IfFileExists "$INSTDIR\VirtualDisplayDriver\devcon.exe" 0 vdd_delete_driver
+    nsExec::ExecToLog '"$INSTDIR\VirtualDisplayDriver\devcon.exe" remove Root\MttVDD'
+    Pop $0
+    DetailPrint "devcon remove exit code: $0"
+
+    vdd_delete_driver:
+    nsExec::ExecToLog 'pnputil /delete-driver "$INSTDIR\VirtualDisplayDriver\MttVDD.inf" /uninstall /force'
+    Pop $0
+    DetailPrint "pnputil delete-driver exit code: $0"
     skip_vdd_remove:
 
     ; Remove files
