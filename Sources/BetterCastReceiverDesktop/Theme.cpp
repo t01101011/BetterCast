@@ -16,6 +16,9 @@
 #ifndef DWMSBT_MAINWINDOW
 #define DWMSBT_MAINWINDOW 2   // Mica
 #endif
+#ifndef DWMSBT_TRANSIENTWINDOW
+#define DWMSBT_TRANSIENTWINDOW 3   // Acrylic — heavier blur than Mica
+#endif
 #endif
 
 #include <QSettings>
@@ -26,7 +29,7 @@ namespace Theme {
 Mode savedMode() {
     QSettings s("BetterCast", "BetterCast");
     const int v = s.value("appearance/theme", static_cast<int>(Mode::System)).toInt();
-    if (v < 0 || v > static_cast<int>(Mode::Dark)) return Mode::System;
+    if (v < 0 || v > static_cast<int>(Mode::Glass)) return Mode::System;
     return static_cast<Mode>(v);
 }
 
@@ -37,7 +40,10 @@ void setSavedMode(Mode mode) {
 
 QPalette qtPalette(const Palette& p) {
     QPalette q;
-    const QColor text(p.text), dim(p.textDim), window(p.window), surface(p.surface);
+    // paletteWindow()/paletteSurface() fall back to the opaque values, because
+    // QColor cannot parse the rgba() strings glass mode uses for its fills.
+    const QColor text(p.text), dim(p.textDim),
+                 window(p.paletteWindow()), surface(p.paletteSurface());
 
     q.setColor(QPalette::Window, window);
     q.setColor(QPalette::WindowText, text);
@@ -98,7 +104,7 @@ QString stylesheet(const Palette& p) {
         background-color: %SURFACE%;
         color: %TEXT%;
         border: 1px solid %BORDER%;
-        border-radius: 6px;
+        border-radius: %CTRL_RADIUS%;
         padding: 7px 10px;
         font-size: 13px;
         selection-background-color: %ACCENT%;
@@ -109,7 +115,7 @@ QString stylesheet(const Palette& p) {
         background-color: %SURFACE%;
         color: %TEXT%;
         border: 1px solid %BORDER_STRONG%;
-        border-radius: 6px;
+        border-radius: %CTRL_RADIUS%;
         padding: 8px 16px;
         font-size: 13px;
     }
@@ -120,7 +126,7 @@ QString stylesheet(const Palette& p) {
     QGroupBox {
         color: %TEXT_DIM%;
         border: 1px solid %BORDER%;
-        border-radius: 10px;
+        border-radius: %CARD_RADIUS%;
         margin-top: 20px;
         padding: 26px 18px 16px 18px;
         font-size: 12px;
@@ -190,8 +196,16 @@ QString stylesheet(const Palette& p) {
         .replace("%SURFACE_ALT%", p.surfaceAlt)
         // Cards sit slightly above the backdrop so Mica reads as depth rather
         // than a flat wash. Kept subtle: too much and text contrast suffers.
-        .replace("%SURFACE_GLASS%", p.isDark ? "rgba(255, 255, 255, 0.03)"
-                                             : "rgba(255, 255, 255, 0.55)")
+        //
+        // Glass mode leans harder on this, because there the card fill is the
+        // only thing separating text from whatever wallpaper is behind it.
+        .replace("%SURFACE_GLASS%", p.glass   ? "rgba(255, 255, 255, 0.07)"
+                                   : p.isDark ? "rgba(255, 255, 255, 0.03)"
+                                              : "rgba(255, 255, 255, 0.55)")
+        // Bigger, softer corners in glass mode — the rounding is most of what
+        // separates a frosted sheet from a flat panel.
+        .replace("%CARD_RADIUS%", p.glass ? "16px" : "10px")
+        .replace("%CTRL_RADIUS%", p.glass ? "9px" : "6px")
         .replace("%SURFACE%", p.surface)
         .replace("%BORDER_STRONG%", p.borderStrong)
         .replace("%BORDER%", p.border)
@@ -215,9 +229,20 @@ void applyWindowBackdrop(QWidget* window, const Palette& p) {
     BOOL dark = p.isDark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark, sizeof(dark));
 
-    // Mica. Fails harmlessly on Windows 10 and early Windows 11 builds.
-    int backdrop = DWMSBT_MAINWINDOW;
+    // Acrylic blurs far more aggressively than Mica, which is what makes panels
+    // read as frosted glass rather than tinted wallpaper. Fails harmlessly on
+    // Windows 10 and early Windows 11 builds.
+    int backdrop = p.glass ? DWMSBT_TRANSIENTWINDOW : DWMSBT_MAINWINDOW;
     DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+
+    // The backdrop has always been requested, but nothing ever showed through:
+    // the window painted an opaque fill straight over it. Glass mode stops Qt
+    // filling the window so the composited backdrop is what you actually see.
+    //
+    // Qt may only honour this at window creation, so switching into or out of
+    // glass can need a restart to take full effect.
+    window->setAttribute(Qt::WA_TranslucentBackground, p.glass);
+    window->setAttribute(Qt::WA_NoSystemBackground, p.glass);
 #else
     Q_UNUSED(window); Q_UNUSED(p);
 #endif

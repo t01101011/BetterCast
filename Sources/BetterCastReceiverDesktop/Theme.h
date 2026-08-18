@@ -37,6 +37,18 @@ struct Palette {
     QString selection;    // rgba string for selected rows
     QString hoverOverlay; // rgba string for hovered rows
     bool isDark = true;
+
+    // Glass mode lets the compositor's blurred backdrop show through, so most
+    // fills become rgba() strings. QPalette cannot parse those and needs real
+    // colours for the widgets Qt draws itself, hence a solid counterpart for
+    // the two that matter. Both default to the opaque values above, so the
+    // ordinary themes are unaffected.
+    QString windowSolid;
+    QString surfaceSolid;
+    bool glass = false;
+
+    QString paletteWindow()  const { return windowSolid.isEmpty()  ? window  : windowSolid; }
+    QString paletteSurface() const { return surfaceSolid.isEmpty() ? surface : surfaceSolid; }
 };
 
 inline Palette darkPalette() {
@@ -79,8 +91,36 @@ inline Palette lightPalette() {
     return p;
 }
 
+// A dark glass finish: the window itself is transparent and every panel is a
+// translucent sheet over the compositor's blurred backdrop, which is as close
+// as Windows gets to the frosted look of macOS vibrancy.
+//
+// Built on the dark palette because translucent white over a bright wallpaper
+// washes text out. Secondary text is lifted well above the flat theme's grey —
+// #888 is readable on a fixed #1a1a1a but disappears over a photo.
+inline Palette glassPalette() {
+    Palette p     = darkPalette();
+    p.window       = "transparent";
+    p.sidebar      = "rgba(255, 255, 255, 0.04)";
+    p.surface      = "rgba(255, 255, 255, 0.07)";
+    p.surfaceHover = "rgba(255, 255, 255, 0.14)";
+    p.surfaceAlt   = "rgba(0, 0, 0, 0.28)";
+    p.border       = "rgba(255, 255, 255, 0.12)";
+    p.borderStrong = "rgba(255, 255, 255, 0.22)";
+    p.text         = "#f5f5f5";
+    p.textDim      = "#c2c2c2";
+    p.textFaint    = "#9a9a9a";
+    p.selection    = "rgba(255, 255, 255, 0.16)";
+    p.hoverOverlay = "rgba(255, 255, 255, 0.08)";
+    p.windowSolid  = "#1a1a1a";
+    p.surfaceSolid = "#2f2f2f";
+    p.glass        = true;
+    p.isDark       = true;
+    return p;
+}
+
 // User's choice. Order matches the Settings combo box.
-enum class Mode { System = 0, Light = 1, Dark = 2 };
+enum class Mode { System = 0, Light = 1, Dark = 2, Glass = 3 };
 
 Mode savedMode();
 void setSavedMode(Mode mode);
@@ -99,6 +139,7 @@ inline Palette activePalette() {
     switch (savedMode()) {
         case Mode::Light: return lightPalette();
         case Mode::Dark:  return darkPalette();
+        case Mode::Glass: return glassPalette();
         case Mode::System: break;
     }
     return systemPrefersDark() ? darkPalette() : lightPalette();

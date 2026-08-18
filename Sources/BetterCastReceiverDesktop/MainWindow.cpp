@@ -1246,6 +1246,7 @@ void MainWindow::setupSettingsPage() {
     m_themeCombo->addItem("Follow system", static_cast<int>(Theme::Mode::System));
     m_themeCombo->addItem("Light", static_cast<int>(Theme::Mode::Light));
     m_themeCombo->addItem("Dark", static_cast<int>(Theme::Mode::Dark));
+    m_themeCombo->addItem("Glass", static_cast<int>(Theme::Mode::Glass));
     m_themeCombo->setCurrentIndex(static_cast<int>(Theme::savedMode()));
     themeRow->addWidget(m_themeCombo);
     themeRow->addStretch();
@@ -1258,7 +1259,9 @@ void MainWindow::setupSettingsPage() {
             });
 
     auto* themeNote = new QLabel(
-        "\"Follow system\" tracks the Windows light/dark setting and updates live.");
+        "\"Follow system\" tracks the Windows light/dark setting and updates live. "
+        "\"Glass\" makes the window translucent so the desktop is blurred behind it — "
+        "it needs Windows 11 and may want a restart to take full effect.");
     themeNote->setWordWrap(true);
     themeNote->setStyleSheet("font-size: 11px; color: palette(mid);");
     themeLayout->addWidget(themeNote);
