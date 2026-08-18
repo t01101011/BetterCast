@@ -12,6 +12,7 @@
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QTimer>
+#include <QPixmap>
 #include <QSize>
 #include <QMouseEvent>
 #include <QStringList>
@@ -106,6 +107,9 @@ class HotspotManager;
 #endif
 
 class UpdateChecker;
+#ifdef _WIN32
+class GlassBackdrop;
+#endif
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -113,6 +117,18 @@ class MainWindow : public QMainWindow {
 public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow();
+
+#ifdef _WIN32
+protected:
+    // Glass mode paints a blurred snapshot of the desktop behind the window as
+    // the window's own background. Being opaque it also clears the backing
+    // store every frame, which the translucent approach never did — that is
+    // what left each page of the stack drawn over the last.
+    void paintEvent(QPaintEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+public:
+#endif
 
 private slots:
     void onSidebarSelectionChanged(int row);
@@ -206,6 +222,14 @@ private:
     QSplitter* m_splitter = nullptr;
     QListWidget* m_sidebarList = nullptr;
     QStackedWidget* m_stack = nullptr;
+
+#ifdef _WIN32
+    GlassBackdrop* m_backdrop      = nullptr;
+    QPixmap        m_backdropPixmap;
+    QTimer*        m_backdropTimer = nullptr;
+    bool           m_glassActive   = false;
+    void refreshBackdrop();
+#endif
 
     // GitHub Releases update check, same source of truth as the macOS app.
     UpdateChecker* m_updateChecker = nullptr;

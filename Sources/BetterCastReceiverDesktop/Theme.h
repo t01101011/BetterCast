@@ -37,6 +37,18 @@ struct Palette {
     QString selection;    // rgba string for selected rows
     QString hoverOverlay; // rgba string for hovered rows
     bool isDark = true;
+
+    // Glass mode fills are rgba() strings so the captured backdrop shows
+    // through them. QColor cannot parse those and QPalette needs real colours
+    // for the widgets Qt draws itself, so the two that matter carry an opaque
+    // counterpart. Both default to the values above, leaving the flat themes
+    // untouched.
+    QString windowSolid;
+    QString surfaceSolid;
+    bool glass = false;
+
+    QString paletteWindow()  const { return windowSolid.isEmpty()  ? window  : windowSolid; }
+    QString paletteSurface() const { return surfaceSolid.isEmpty() ? surface : surfaceSolid; }
 };
 
 inline Palette darkPalette() {
@@ -79,8 +91,39 @@ inline Palette lightPalette() {
     return p;
 }
 
+// Frosted glass over a captured, blurred snapshot of the desktop behind the
+// window — see GlassBackdrop. The window background is left unpainted by the
+// stylesheet because MainWindow::paintEvent draws that snapshot instead; every
+// fill below is translucent so it composites over it.
+//
+// Crucially the window itself stays opaque. The previous attempt made it
+// translucent to let Mica through, which stopped Qt clearing its backing store
+// and left every page of the stack drawn on top of the last.
+inline Palette glassPalette() {
+    Palette p      = darkPalette();
+    p.window       = "transparent";      // paintEvent supplies the backdrop
+    p.sidebar      = "rgba(255, 255, 255, 0.06)";
+    p.surface      = "rgba(255, 255, 255, 0.10)";
+    p.surfaceHover = "rgba(255, 255, 255, 0.18)";
+    p.surfaceAlt   = "rgba(0, 0, 0, 0.30)";
+    p.border       = "rgba(255, 255, 255, 0.14)";
+    p.borderStrong = "rgba(255, 255, 255, 0.24)";
+    p.text         = "#F6F9FE";
+    // Well above the flat theme's #888: grey that reads on a fixed dark fill
+    // disappears over an arbitrary desktop.
+    p.textDim      = "#C8D0DE";
+    p.textFaint    = "#9AA5B8";
+    p.selection    = "rgba(255, 255, 255, 0.17)";
+    p.hoverOverlay = "rgba(255, 255, 255, 0.09)";
+    p.windowSolid  = "#1a1a1a";
+    p.surfaceSolid = "#2f2f2f";
+    p.glass        = true;
+    p.isDark       = true;
+    return p;
+}
+
 // User's choice. Order matches the Settings combo box.
-enum class Mode { System = 0, Light = 1, Dark = 2 };
+enum class Mode { System = 0, Light = 1, Dark = 2, Glass = 3 };
 
 Mode savedMode();
 void setSavedMode(Mode mode);
@@ -99,6 +142,7 @@ inline Palette activePalette() {
     switch (savedMode()) {
         case Mode::Light: return lightPalette();
         case Mode::Dark:  return darkPalette();
+        case Mode::Glass: return glassPalette();
         case Mode::System: break;
     }
     return systemPrefersDark() ? darkPalette() : lightPalette();

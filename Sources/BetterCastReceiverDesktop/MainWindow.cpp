@@ -1,5 +1,8 @@
 #include "MainWindow.h"
 #include "UpdateChecker.h"
+#ifdef _WIN32
+#include "GlassBackdrop.h"
+#endif
 #include <QDesktopServices>
 #include <QPoint>
 #ifdef _WIN32
@@ -321,7 +324,76 @@ void MainWindow::applyTheme() {
     qApp->setPalette(Theme::qtPalette(p));
     setStyleSheet(Theme::stylesheet(p));
     Theme::applyWindowBackdrop(this, p);
+
+#ifdef _WIN32
+    if (p.glass == m_glassActive) return;
+    m_glassActive = p.glass;
+
+    if (!m_backdrop) m_backdrop = new GlassBackdrop(this);
+
+    // Hide the window from screen capture, or grabbing the desktop behind it
+    // grabs the window too and tunnels forever.
+    //
+    // This has a cost worth knowing about in this app of all apps: an excluded
+    // window is invisible to OBS, to Teams, and to BetterCast's own streaming,
+    // so a demo of BetterCast shows a hole where BetterCast is. It applies only
+    // while Glass is selected — the flat themes leave the window capturable.
+    GlassBackdrop::setExcludedFromCapture(winId(), m_glassActive);
+
+    if (m_glassActive) {
+        if (!m_backdropTimer) {
+            m_backdropTimer = new QTimer(this);
+            // The backdrop is blurred past recognition, so it can lag well
+            // behind the desktop without anyone noticing. Refreshing slowly
+            // keeps a screen grab off the hot path.
+            m_backdropTimer->setInterval(1200);
+            connect(m_backdropTimer, &QTimer::timeout, this, &MainWindow::refreshBackdrop);
+        }
+        m_backdropTimer->start();
+        refreshBackdrop();
+    } else {
+        if (m_backdropTimer) m_backdropTimer->stop();
+        m_backdropPixmap = QPixmap();
+    }
+    update();
+#endif
 }
+
+#ifdef _WIN32
+void MainWindow::refreshBackdrop() {
+    if (!m_glassActive || !m_backdrop || isMinimized()) return;
+
+    const QImage shot = m_backdrop->capture(QRect(mapToGlobal(QPoint(0, 0)), size()));
+    if (shot.isNull()) return;
+
+    m_backdropPixmap = QPixmap::fromImage(shot);
+    update();
+}
+
+void MainWindow::paintEvent(QPaintEvent* event) {
+    if (m_glassActive && !m_backdropPixmap.isNull()) {
+        QPainter painter(this);
+        painter.drawPixmap(rect(), m_backdropPixmap);
+        // A dark veil keeps text legible over a bright or busy desktop, and
+        // gives the glass its tint. Without it, contrast is at the mercy of
+        // whatever wallpaper happens to be behind the window.
+        painter.fillRect(rect(), QColor(16, 20, 30, 150));
+    }
+    QMainWindow::paintEvent(event);
+}
+
+void MainWindow::moveEvent(QMoveEvent* event) {
+    QMainWindow::moveEvent(event);
+    // What is behind the window changed entirely; a stale backdrop would slide
+    // with the window and look painted on.
+    refreshBackdrop();
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+    QMainWindow::resizeEvent(event);
+    refreshBackdrop();
+}
+#endif
 
 void MainWindow::setupUi() {
     applyTheme();
@@ -1246,6 +1318,9 @@ void MainWindow::setupSettingsPage() {
     m_themeCombo->addItem("Follow system", static_cast<int>(Theme::Mode::System));
     m_themeCombo->addItem("Light", static_cast<int>(Theme::Mode::Light));
     m_themeCombo->addItem("Dark", static_cast<int>(Theme::Mode::Dark));
+#ifdef _WIN32
+    m_themeCombo->addItem("Glass", static_cast<int>(Theme::Mode::Glass));
+#endif
     m_themeCombo->setCurrentIndex(static_cast<int>(Theme::savedMode()));
     themeRow->addWidget(m_themeCombo);
     themeRow->addStretch();
@@ -1258,7 +1333,9 @@ void MainWindow::setupSettingsPage() {
             });
 
     auto* themeNote = new QLabel(
-        "\"Follow system\" tracks the Windows light/dark setting and updates live.");
+        "\"Follow system\" tracks the Windows light/dark setting and updates live. "
+        "\"Glass\" frosts the desktop behind the window — while it is on, the "
+        "BetterCast window is hidden from screen recording and streaming.");
     themeNote->setWordWrap(true);
     themeNote->setStyleSheet("font-size: 11px; color: palette(mid);");
     themeLayout->addWidget(themeNote);

@@ -26,7 +26,7 @@ namespace Theme {
 Mode savedMode() {
     QSettings s("BetterCast", "BetterCast");
     const int v = s.value("appearance/theme", static_cast<int>(Mode::System)).toInt();
-    if (v < 0 || v > static_cast<int>(Mode::Dark)) return Mode::System;
+    if (v < 0 || v > static_cast<int>(Mode::Glass)) return Mode::System;
     return static_cast<Mode>(v);
 }
 
@@ -37,7 +37,10 @@ void setSavedMode(Mode mode) {
 
 QPalette qtPalette(const Palette& p) {
     QPalette q;
-    const QColor text(p.text), dim(p.textDim), window(p.window), surface(p.surface);
+    // paletteWindow()/paletteSurface() fall back to opaque values, since QColor
+    // cannot parse the rgba() strings glass mode uses for its fills.
+    const QColor text(p.text), dim(p.textDim),
+                 window(p.paletteWindow()), surface(p.paletteSurface());
 
     q.setColor(QPalette::Window, window);
     q.setColor(QPalette::WindowText, text);
@@ -190,8 +193,9 @@ QString stylesheet(const Palette& p) {
         .replace("%SURFACE_ALT%", p.surfaceAlt)
         // Cards sit slightly above the backdrop so Mica reads as depth rather
         // than a flat wash. Kept subtle: too much and text contrast suffers.
-        .replace("%SURFACE_GLASS%", p.isDark ? "rgba(255, 255, 255, 0.03)"
-                                             : "rgba(255, 255, 255, 0.55)")
+        .replace("%SURFACE_GLASS%", p.glass   ? "rgba(255, 255, 255, 0.10)"
+                                   : p.isDark ? "rgba(255, 255, 255, 0.03)"
+                                              : "rgba(255, 255, 255, 0.55)")
         .replace("%SURFACE%", p.surface)
         .replace("%BORDER_STRONG%", p.borderStrong)
         .replace("%BORDER%", p.border)
