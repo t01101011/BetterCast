@@ -128,8 +128,8 @@ set(HEADERS
 # Windows Mobile Hotspot control. Not sender-only: a receiver may want to host
 # the network too, and it is useless everywhere else.
 if(WIN32)
-    list(APPEND SOURCES HotspotManager.cpp)
-    list(APPEND HEADERS HotspotManager.h)
+    list(APPEND SOURCES HotspotManager.cpp thirdparty/qrcodegen.cpp)
+    list(APPEND HEADERS HotspotManager.h QrImage.h thirdparty/qrcodegen.hpp)
 
     # This one file compiles as C++20 while the rest of the project stays on 17.
     #

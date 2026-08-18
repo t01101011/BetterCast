@@ -1,4 +1,8 @@
 #include "MainWindow.h"
+#ifdef _WIN32
+#include "HotspotManager.h"
+#include "QrImage.h"
+#endif
 #include "VideoDecoder.h"
 #include "VideoRenderer.h"
 #include "VideoWindow.h"
@@ -377,6 +381,9 @@ void MainWindow::setupUi() {
     setupDevicePage();
 #endif
     setupReceivePage();
+#ifdef _WIN32
+    setupHotspotPage();
+#endif
     setupSettingsPage();
     setupLogsPage();
 
@@ -464,6 +471,9 @@ void MainWindow::rebuildSidebar() {
     addSidebarItem(m_sidebarList, Icons::receive(), "Receive Screen", m_pageReceive);
 
     addSidebarSection(m_sidebarList, "");
+#ifdef _WIN32
+    addSidebarItem(m_sidebarList, Icons::wifi(), "Wi-Fi Hotspot", m_pageHotspot);
+#endif
     addSidebarItem(m_sidebarList, Icons::settings(), "Settings", m_pageSettings);
     addSidebarItem(m_sidebarList, Icons::logs(), "Logs", m_pageLogs);
 
@@ -1016,6 +1026,162 @@ void MainWindow::setupReceivePage() {
 }
 
 // ─── Settings Page ──────────────────────────────────────────────────────────────
+
+#ifdef _WIN32
+void MainWindow::setupHotspotPage() {
+    auto* page = new QWidget();
+    auto* scroll = new QScrollArea();
+    scroll->setWidget(page);
+    scroll->setWidgetResizable(true);
+
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(40, 30, 40, 30);
+    layout->setSpacing(16);
+
+    auto* pageTitle = new QLabel("Wi-Fi Hotspot");
+    pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
+    layout->addWidget(pageTitle);
+
+    auto* why = new QLabel(
+        "Streaming only needs both devices on one local network — it never uses the "
+        "internet. Public Wi-Fi usually blocks devices from seeing each other, which "
+        "stops BetterCast working at all. Hosting a hotspot here puts your receiver "
+        "on the same network as this PC, so it always has a path.");
+    why->setStyleSheet("color: palette(mid); font-size: 12px;");
+    why->setWordWrap(true);
+    layout->addWidget(why);
+
+    auto* card = makeCard("Hotspot");
+    auto* cardLayout = new QVBoxLayout(card);
+    cardLayout->setSpacing(10);
+
+    m_hsStatus = new QLabel("Checking...");
+    m_hsStatus->setStyleSheet("font-size: 15px; font-weight: bold; color: #4da6ff;");
+    cardLayout->addWidget(m_hsStatus);
+
+    m_hsDetail = new QLabel();
+    m_hsDetail->setStyleSheet("font-size: 13px; color: palette(mid);");
+    m_hsDetail->setWordWrap(true);
+    cardLayout->addWidget(m_hsDetail);
+
+    m_hsToggle = new QPushButton("Start Hotspot");
+    m_hsToggle->setStyleSheet(
+        "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
+        "padding: 10px 20px; border-radius: 8px; font-size: 14px; border: none; }"
+        "QPushButton:hover { background-color: #1a8ae8; }"
+        "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
+    connect(m_hsToggle, &QPushButton::clicked, this, [this]() {
+        if (!m_hotspot) return;
+        const auto info = m_hotspot->query();
+        m_hotspotWanted = !info.on;
+        m_hsToggle->setEnabled(false);
+        if (info.on) m_hotspot->stop();
+        else         m_hotspot->start();
+    });
+    cardLayout->addWidget(m_hsToggle);
+
+    layout->addWidget(card);
+
+    auto* qrCard = makeCard("Scan to Join");
+    auto* qrLayout = new QVBoxLayout(qrCard);
+    qrLayout->setSpacing(10);
+
+    m_hsQr = new QLabel();
+    m_hsQr->setAlignment(Qt::AlignCenter);
+    qrLayout->addWidget(m_hsQr);
+
+    m_hsCaption = new QLabel();
+    m_hsCaption->setStyleSheet("font-size: 12px; color: palette(mid);");
+    m_hsCaption->setWordWrap(true);
+    m_hsCaption->setAlignment(Qt::AlignCenter);
+    m_hsCaption->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    qrLayout->addWidget(m_hsCaption);
+
+    layout->addWidget(qrCard);
+    layout->addStretch();
+
+    m_pageHotspot = m_stack->addWidget(scroll);
+
+    m_hotspot = new HotspotManager(this);
+    connect(m_hotspot, &HotspotManager::stateChanged, this,
+            [this](const HotspotManager::Info&) { refreshHotspotUi(); });
+    connect(m_hotspot, &HotspotManager::failed, this, [this](const QString& message) {
+        m_hotspotWanted = false;
+        LogManager::instance().log("Hotspot: " + message);
+        refreshHotspotUi();
+    });
+
+    // Windows stops the hotspot on its own after about five minutes with no
+    // client attached. Without this the QR on screen would quietly start
+    // pointing at a network that no longer exists — the user reads it, walks to
+    // their phone, and finds nothing to join. Re-arm instead of trusting it to
+    // stay up. Clearing PeerlessTimeoutEnabled would also stop the shutoff, but
+    // that needs elevation and changes behaviour for every other app.
+    m_hotspotTimer = new QTimer(this);
+    m_hotspotTimer->setInterval(15000);
+    connect(m_hotspotTimer, &QTimer::timeout, this, [this]() {
+        if (!m_hotspot) return;
+        const auto info = m_hotspot->query();
+        if (m_hotspotWanted && info.supported && !info.on) {
+            LogManager::instance().log(
+                "Hotspot: Windows switched it off after its idle timeout — restarting");
+            m_hotspot->start();
+            return;
+        }
+        refreshHotspotUi();
+    });
+    m_hotspotTimer->start();
+
+    refreshHotspotUi();
+}
+
+void MainWindow::refreshHotspotUi() {
+    if (!m_hotspot || !m_hsStatus) return;
+
+    const auto info = m_hotspot->query();
+    m_hsToggle->setEnabled(info.supported);
+
+    if (!info.supported) {
+        m_hsStatus->setText("Not available");
+        m_hsStatus->setStyleSheet("font-size: 15px; font-weight: bold; color: palette(mid);");
+        m_hsDetail->setText(info.error.isEmpty()
+            ? QStringLiteral("Windows would not report a hotspot on this machine.")
+            : info.error);
+        m_hsToggle->setText("Start Hotspot");
+        m_hsQr->clear();
+        m_hsCaption->clear();
+        return;
+    }
+
+    m_hsToggle->setText(info.on ? "Stop Hotspot" : "Start Hotspot");
+
+    if (!info.on) {
+        m_hsStatus->setText("Off");
+        m_hsStatus->setStyleSheet("font-size: 15px; font-weight: bold; color: palette(mid);");
+        m_hsDetail->setText(QString("Network name will be \"%1\". Start it, then scan the "
+                                    "code with your phone's camera.").arg(info.ssid));
+        m_hsQr->clear();
+        m_hsCaption->clear();
+        return;
+    }
+
+    m_hsStatus->setText("On");
+    m_hsStatus->setStyleSheet("font-size: 15px; font-weight: bold; color: #3ddc84;");
+    m_hsDetail->setText(QString("%1 — %2 of %3 device(s) connected.")
+                            .arg(info.ssid).arg(info.clientCount).arg(info.maxClients));
+
+    const QPixmap qr = QrImage::render(QrImage::wifiPayload(info.ssid, info.passphrase), 260);
+    if (qr.isNull()) {
+        m_hsQr->clear();
+        m_hsCaption->setText(QString("Join \"%1\" — password %2").arg(info.ssid, info.passphrase));
+    } else {
+        m_hsQr->setPixmap(qr);
+        m_hsCaption->setText(
+            QString("Point your phone's camera at this code to join \"%1\".\n"
+                    "Password: %2").arg(info.ssid, info.passphrase));
+    }
+}
+#endif // _WIN32
 
 void MainWindow::setupSettingsPage() {
     auto* page = new QWidget();

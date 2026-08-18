@@ -101,6 +101,10 @@ class SenderController;
 class VirtualDisplayVDD;
 #endif
 
+#ifdef _WIN32
+class HotspotManager;
+#endif
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -165,6 +169,10 @@ private:
     void setupOverviewPage();
     void setupReceivePage();
     void setupSettingsPage();
+#ifdef _WIN32
+    void setupHotspotPage();
+    void refreshHotspotUi();
+#endif
     void setupLogsPage();
 #ifdef ENABLE_SENDER
     void setupSendPage();
@@ -192,6 +200,20 @@ private:
     QSplitter* m_splitter = nullptr;
     QListWidget* m_sidebarList = nullptr;
     QStackedWidget* m_stack = nullptr;
+
+#ifdef _WIN32
+    // Wi-Fi hotspot pairing page. Windows-only: Mobile Hotspot is a WinRT
+    // feature and there is no equivalent to expose elsewhere.
+    int              m_pageHotspot   = -1;
+    HotspotManager*  m_hotspot       = nullptr;
+    QTimer*          m_hotspotTimer  = nullptr;
+    bool             m_hotspotWanted = false;   // user asked for it; keep it alive
+    QLabel*          m_hsStatus      = nullptr;
+    QLabel*          m_hsDetail      = nullptr;
+    QLabel*          m_hsQr          = nullptr;
+    QLabel*          m_hsCaption     = nullptr;
+    QPushButton*     m_hsToggle      = nullptr;
+#endif
 
     // Page indices (set during setupUi based on ENABLE_SENDER)
     int m_pageOverview = -1;
