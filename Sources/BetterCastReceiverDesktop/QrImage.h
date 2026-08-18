@@ -22,9 +22,9 @@ inline QString wifiEscape(const QString& value) {
     QString out;
     out.reserve(value.size());
     for (const QChar c : value) {
-        if (c == QLatin1Char('\') || c == QLatin1Char(';') || c == QLatin1Char(',') ||
+        if (c == QLatin1Char('\\') || c == QLatin1Char(';') || c == QLatin1Char(',') ||
             c == QLatin1Char(':')  || c == QLatin1Char('"')) {
-            out += QLatin1Char('\');
+            out += QLatin1Char('\\');
         }
         out += c;
     }
