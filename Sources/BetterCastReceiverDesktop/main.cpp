@@ -77,7 +77,11 @@ int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setApplicationName("BetterCast");
     app.setOrganizationName("BetterCast");
-    app.setApplicationVersion("1.0.0");
+#ifdef BETTERCAST_VERSION
+    app.setApplicationVersion(QStringLiteral(BETTERCAST_VERSION));
+#else
+    app.setApplicationVersion("0.0.0");
+#endif
     // Rounded to match the macOS icon. This drives the title bar, the taskbar
     // button and Alt-Tab; handing it the raw square PNG left all three square
     // even after the in-app logo and the generated .ico were rounded.

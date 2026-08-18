@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(BetterCastReceiver VERSION 1.0.0 LANGUAGES CXX)
+project(BetterCastReceiver VERSION 17.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -95,6 +95,7 @@ endif()
 set(SOURCES
     main.cpp
     MainWindow.cpp
+    UpdateChecker.cpp
     Theme.cpp
     DisplayArrangement.cpp
     NetworkListener.cpp
@@ -110,6 +111,7 @@ set(SOURCES
 
 set(HEADERS
     MainWindow.h
+    UpdateChecker.h
     Theme.h
     DisplayArrangement.h
     Icons.h
@@ -187,6 +189,14 @@ add_executable(BetterCastReceiver ${SOURCES} ${HEADERS} ${RESOURCES})
 
 target_include_directories(BetterCastReceiver PRIVATE
     ${FFMPEG_ALL_INCLUDE_DIRS}
+)
+
+# One source of truth for the version. It used to be spelled out separately in
+# this file, in main.cpp and in the CI makensis line, and they had already
+# drifted: the app reported 1.0.0 while the published release said 1.0.1. The
+# update checker compares against exactly this, so a drift would make it lie.
+target_compile_definitions(BetterCastReceiver PRIVATE
+    BETTERCAST_VERSION="${PROJECT_VERSION}"
 )
 
 if(DEFINED FFMPEG_ALL_LIBRARY_DIRS)

@@ -105,6 +105,8 @@ class VirtualDisplayVDD;
 class HotspotManager;
 #endif
 
+class UpdateChecker;
+
 class MainWindow : public QMainWindow {
     Q_OBJECT
 
@@ -200,6 +202,12 @@ private:
     QSplitter* m_splitter = nullptr;
     QListWidget* m_sidebarList = nullptr;
     QStackedWidget* m_stack = nullptr;
+
+    // GitHub Releases update check, same source of truth as the macOS app.
+    UpdateChecker* m_updateChecker = nullptr;
+    QLabel*        m_updateLabel   = nullptr;
+    QPushButton*   m_updateBtn     = nullptr;
+    QString        m_updateUrl;
 
 #ifdef _WIN32
     // Wi-Fi hotspot pairing page. Windows-only: Mobile Hotspot is a WinRT

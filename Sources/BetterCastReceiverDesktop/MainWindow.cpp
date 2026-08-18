@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "UpdateChecker.h"
+#include <QDesktopServices>
 #ifdef _WIN32
 #include "HotspotManager.h"
 #include "QrImage.h"
@@ -384,7 +386,39 @@ void MainWindow::setupUi() {
 #ifdef _WIN32
     setupHotspotPage();
 #endif
+
+    // Built before the Settings page so its About card can bind to the signals.
+    m_updateChecker = new UpdateChecker(this);
+    connect(m_updateChecker, &UpdateChecker::finished, this,
+            [this](bool available, const QString& tag, const QString& url, const QString&) {
+        m_updateUrl = url;
+        if (!m_updateLabel) return;
+        if (available) {
+            m_updateLabel->setText(QString("Update available: %1 (you have %2)")
+                                       .arg(tag, UpdateChecker::currentTag()));
+            m_updateLabel->setStyleSheet("font-size: 12px; color: #3ddc84; font-weight: bold;");
+            if (m_updateBtn) m_updateBtn->setVisible(true);
+            LogManager::instance().log(QString("Update: %1 available (current %2)")
+                                           .arg(tag, UpdateChecker::currentTag()));
+        } else {
+            m_updateLabel->setText(QString("You are on the latest version (%1)")
+                                       .arg(UpdateChecker::currentTag()));
+            m_updateLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
+            if (m_updateBtn) m_updateBtn->setVisible(false);
+        }
+    });
+    connect(m_updateChecker, &UpdateChecker::failed, this, [this](const QString& message) {
+        if (!m_updateLabel) return;
+        // A failed check is not worth alarming anyone about — no network is the
+        // usual cause, and BetterCast is frequently used on an isolated hotspot
+        // with no internet at all.
+        m_updateLabel->setText("Could not check for updates: " + message);
+        m_updateLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
+        if (m_updateBtn) m_updateBtn->setVisible(false);
+    });
+
     setupSettingsPage();
+    m_updateChecker->check();
     setupLogsPage();
 
     // Build sidebar
@@ -1235,8 +1269,8 @@ void MainWindow::setupSettingsPage() {
     auto* aboutLayout = new QVBoxLayout(aboutCard);
     aboutLayout->setSpacing(8);
 
-    m_versionLabel = new QLabel(QString("BetterCast v%1")
-        .arg(QApplication::applicationVersion()));
+    m_versionLabel = new QLabel(QString("BetterCast %1  (%2)")
+        .arg(UpdateChecker::currentTag(), UpdateChecker::currentVersion()));
     m_versionLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: palette(window-text);");
     aboutLayout->addWidget(m_versionLabel);
 
@@ -1246,6 +1280,34 @@ void MainWindow::setupSettingsPage() {
     descLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     descLabel->setWordWrap(true);
     aboutLayout->addWidget(descLabel);
+
+    // Update status, matching the macOS app's About panel.
+    m_updateLabel = new QLabel("Checking for updates...");
+    m_updateLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
+    m_updateLabel->setWordWrap(true);
+    aboutLayout->addWidget(m_updateLabel);
+
+    m_updateBtn = new QPushButton("Download Update");
+    m_updateBtn->setStyleSheet(
+        "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
+        "padding: 8px 20px; border-radius: 6px; border: none; }"
+        "QPushButton:hover { background-color: #1a8ae8; }");
+    m_updateBtn->setVisible(false);
+    connect(m_updateBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_updateUrl.isEmpty()) QDesktopServices::openUrl(QUrl(m_updateUrl));
+    });
+    aboutLayout->addWidget(m_updateBtn);
+
+    auto* recheckBtn = new QPushButton("Check Again");
+    recheckBtn->setStyleSheet(
+        "QPushButton { background-color: transparent; color: palette(mid); "
+        "padding: 4px 0px; border: none; text-align: left; }"
+        "QPushButton:hover { color: palette(window-text); }");
+    connect(recheckBtn, &QPushButton::clicked, this, [this]() {
+        if (m_updateLabel) m_updateLabel->setText("Checking for updates...");
+        if (m_updateChecker) m_updateChecker->check();
+    });
+    aboutLayout->addWidget(recheckBtn);
 
     layout->addWidget(aboutCard);
 
