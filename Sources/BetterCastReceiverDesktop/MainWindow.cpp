@@ -1831,10 +1831,15 @@ void MainWindow::onRefreshMonitors() {
 
     LogManager::instance().log(QString("Found %1 monitor(s), %2 virtual")
                                    .arg(monitors.size()).arg(virtualCount));
+    // Several virtual displays is the normal, intended state: one per receiver,
+    // created as a pool before the first stream because adding one later
+    // restarts the driver and kills any capture already running. The old advice
+    // here was to delete the extras, which would break multi-receiver streaming.
     if (virtualCount > 1) {
         LogManager::instance().log(
-            QString("Note: %1 virtual displays present. Extras are usually left over "
-                    "from repeated installs — use Remove to clear them.").arg(virtualCount));
+            QString("Note: %1 virtual displays ready — one per receiver. Remove them "
+                    "only if you no longer stream to more than one device.")
+                .arg(virtualCount));
     }
 }
 

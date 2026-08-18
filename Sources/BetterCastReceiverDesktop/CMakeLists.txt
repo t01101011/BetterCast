@@ -125,6 +125,13 @@ set(HEADERS
     AdbHelper.h
 )
 
+# Windows Mobile Hotspot control. Not sender-only: a receiver may want to host
+# the network too, and it is useless everywhere else.
+if(WIN32)
+    list(APPEND SOURCES HotspotManager.cpp)
+    list(APPEND HEADERS HotspotManager.h)
+endif()
+
 # Sender mode sources
 if(ENABLE_SENDER)
     list(APPEND SOURCES
@@ -204,8 +211,9 @@ endif()
 
 # Windows-specific settings
 if(WIN32)
-    # dwmapi: Mica backdrop and the dark/light title bar
-    target_link_libraries(BetterCastReceiver PRIVATE ws2_32 dwmapi)
+    # dwmapi:      Mica backdrop and the dark/light title bar
+    # windowsapp:  C++/WinRT umbrella import lib, for NetworkOperatorTetheringManager
+    target_link_libraries(BetterCastReceiver PRIVATE ws2_32 dwmapi windowsapp)
     set_target_properties(BetterCastReceiver PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
