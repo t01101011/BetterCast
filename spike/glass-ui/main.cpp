@@ -111,7 +111,12 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-// ── BetterCast's device page, in Glass widgets ──────────────────────────────
+// -- BetterCast's device page, in Glass widgets ------------------------------
+//
+// Follows liquidDX11's own page idiom: Glass::BeginPanel/EndPanel with
+// StatRow, Slider and Button inside. The first attempt used BeginCard nested
+// in ImGui::Columns, which is not how the kit is laid out and rendered as a
+// broken interface.
 static void DrawBetterCastPage(int winW, int winH) {
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImVec2((float)winW, (float)winH));
@@ -120,86 +125,87 @@ static void DrawBetterCastPage(int winW, int winH) {
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::Columns(2, "layout", false);
-    ImGui::SetColumnWidth(0, 250.0f);
-
-    // ── Sidebar ────────────────────────────────────────────────────────────
-    Glass::SectionHeader("DEVICES");
+    // ---- Sidebar --------------------------------------------------------
+    ImGui::BeginChild("sidebar", ImVec2(236.0f, 0.0f), false);
+    Glass::BeginPanel("DEVICES");
     static int selected = 2;
     const char* devices[] = { "Overview", "Lenovo Legion Y70",
                               "Stephen's MacBook Air", "Stephen's iPhone" };
     for (int i = 0; i < 4; i++) {
         if (Glass::Chip(devices[i], selected == i)) selected = i;
     }
+    Glass::EndPanel();
 
-    Glass::SectionHeader("SEND");
+    Glass::BeginPanel("SEND / RECEIVE");
     Glass::Chip("Send Screen", false);
-    Glass::SectionHeader("RECEIVE");
     Glass::Chip("Receive Screen", false);
+    Glass::EndPanel();
 
-    Glass::Divider();
+    Glass::BeginPanel("SYSTEM");
     Glass::Chip("Wi-Fi Hotspot", false);
     Glass::Chip("Settings", false);
     Glass::Chip("Logs", false);
+    Glass::EndPanel();
+    ImGui::EndChild();
 
-    ImGui::NextColumn();
-
-    // ── Device page ────────────────────────────────────────────────────────
-    ImGui::TextUnformatted("Stephen's MacBook Air");
-    Glass::StatusPill("Available", IM_COL32(67, 224, 140, 255));
     ImGui::SameLine();
-    ImGui::TextDisabled("192.168.254.111:51820");
 
-    ImGui::Dummy(ImVec2(0, 8));
+    // ---- Device page ----------------------------------------------------
+    ImGui::BeginChild("content", ImVec2(0.0f, 0.0f), false);
 
-    if (Glass::BeginCard("stream_to", Glass::Material::Regular)) {
-        Glass::SectionHeader("STREAM TO THIS DEVICE");
-        ImGui::TextWrapped("Gives this device a virtual display of its own, so your "
-                           "desktop extends onto it rather than mirroring.");
-        ImGui::Dummy(ImVec2(0, 6));
-        if (Glass::Button("Send Screen Here", true)) {}
-        ImGui::SameLine();
-        if (Glass::Button("Configure...", false)) {}
-        Glass::EndCard();
-    }
+    Glass::BeginPanel("STEPHEN'S MACBOOK AIR");
+    Glass::StatRow("Address", "192.168.254.111:51820");
+    Glass::StatRow("Status", "Available");
+    Glass::EndPanel();
 
-    ImGui::Dummy(ImVec2(0, 8));
+    Glass::BeginPanel("STREAM TO THIS DEVICE");
+    ImGui::TextWrapped("Gives this device a virtual display of its own, so your "
+                       "desktop extends onto it rather than mirroring.");
+    ImGui::Dummy(ImVec2(0, 6));
+    if (Glass::Button("Send Screen Here", true)) {}
+    ImGui::SameLine();
+    if (Glass::Button("Configure...", false)) {}
+    Glass::EndPanel();
 
-    if (Glass::BeginCard("quality", Glass::Material::Regular)) {
-        Glass::SectionHeader("STREAM QUALITY FOR THIS DEVICE");
+    Glass::BeginPanel("STREAM QUALITY FOR THIS DEVICE");
+    static float fps = 60.0f, bitrate = 20.0f;
+    ImGui::SetNextItemWidth(240.0f);
+    Glass::Slider("Frame rate", &fps, 15.0f, 120.0f, "%.0f FPS");
+    static int resIdx = 1;
+    const char* resolutions[] = { "Match this PC - 1920 x 1080", "1440 x 900",
+                                  "1280 x 800", "1280 x 720" };
+    Glass::Dropdown("Resolution", resolutions, 4, &resIdx);
+    ImGui::SetNextItemWidth(240.0f);
+    Glass::Slider("Bitrate", &bitrate, 2.0f, 100.0f, "%.0f Mbps");
+    Glass::EndPanel();
 
-        static int fps = 60;
-        Glass::Stepper("Frame rate", &fps, 5, 15, 120);
+    // ---- Spike instrumentation ------------------------------------------
+    //
+    // On screen rather than in a log, because the previous round produced
+    // "it looks plain" and there was no way to tell whether the backdrop had
+    // failed, the SRVs were null, or the material was drawing wrongly.
+    // Backdrop::Init ignores the result of CreateDuplication and returns true
+    // regardless, so a failed capture looks exactly like success from outside.
+    Glass::BeginPanel("SPIKE DIAGNOSTICS");
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.1f FPS  (%.2f ms)",
+                  ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
+    Glass::StatRow("Frame", buf);
+    Glass::StatRow("Backdrop", g_backdrop.ok() ? "capturing" : "FAILED - no glass");
+    std::snprintf(buf, sizeof(buf), "%d x %d", g_backdrop.width(), g_backdrop.height());
+    Glass::StatRow("Desktop size", buf);
+    Glass::StatRow("Heavy SRV", g_backdrop.heavySRV() ? "ok" : "null");
+    Glass::StatRow("Soft SRV",  g_backdrop.softSRV()  ? "ok" : "null");
+    std::snprintf(buf, sizeof(buf), "%d ms", g_backdropIntervalMs);
+    Glass::StatRow("Recapture every", g_backdropIntervalMs == 0 ? "every frame" : buf);
+    std::snprintf(buf, sizeof(buf), "%.1fx", g_renderScale);
+    Glass::StatRow("Render scale", buf);
+    Glass::StatRow("VSync", g_vsync ? "on" : "off");
+    ImGui::Dummy(ImVec2(0, 4));
+    ImGui::TextDisabled("F1 recapture rate   F2 render scale   F3 vsync   Esc quit");
+    Glass::EndPanel();
 
-        static int resIdx = 1;
-        const char* resolutions[] = { "Match this PC - 1920 x 1080", "1440 x 900",
-                                      "1280 x 800", "1280 x 720" };
-        Glass::Dropdown("Resolution", resolutions, 4, &resIdx);
-
-        static int bitrate = 20;
-        Glass::Stepper("Bitrate (Mbps)", &bitrate, 1, 2, 100);
-
-        Glass::Divider();
-        ImGui::TextDisabled("Changes take effect the next time you start streaming.");
-        Glass::EndCard();
-    }
-
-    ImGui::Dummy(ImVec2(0, 8));
-
-    if (Glass::BeginCard("perf", Glass::Material::Thin)) {
-        Glass::SectionHeader("SPIKE: GPU COST CONTROLS");
-        ImGui::Text("%.1f FPS  (%.2f ms/frame)",
-                    ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
-        Glass::StatRow("Backdrop recapture", g_backdropIntervalMs == 0
-                       ? "every frame" : "throttled");
-        Glass::StatRow("Render scale", g_renderScale > 1.0f ? "reduced" : "full");
-        Glass::StatRow("VSync", g_vsync ? "on" : "off");
-        ImGui::Dummy(ImVec2(0, 4));
-        ImGui::TextDisabled("F1 backdrop rate   F2 render scale   F3 vsync");
-        Glass::EndCard();
-    }
-
-    ImGui::Columns(1);
+    ImGui::EndChild();
     ImGui::End();
 }
 
