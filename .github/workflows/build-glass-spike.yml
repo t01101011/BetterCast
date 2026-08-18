@@ -44,24 +44,52 @@ jobs:
           cmake -S liquidDX11 -B build-ref -A x64
           cmake --build build-ref --config Release
 
-      - name: Build the BetterCast device page in glass
+      # Overlay rather than reimplement. A hand-written window reproduced none
+      # of their layout scaffolding - fonts at set sizes, the scale factor,
+      # panel widths, window chrome, page switching - and rendered as
+      # misaligned panels over a stretched sidebar. Copying their tree and
+      # swapping only the page bodies keeps all of it.
+      - name: Overlay BetterCast pages onto a copy of liquidDX11
         shell: pwsh
         run: |
-          cmake -S bettercast/spike/glass-ui -B build-spike -A x64 `
-                -DLIQUID_DIR="${{ github.workspace }}/liquidDX11"
+          Copy-Item -Recurse liquidDX11 liquid-bc
+          $pages = 'liquid-bc/examples/example_win32_directx11/src/app/pages'
+          Copy-Item bettercast/spike/glass-ui/pages/*.inc $pages -Force
+          Write-Host "overlaid: $((Get-ChildItem bettercast/spike/glass-ui/pages/*.inc).Name -join ', ')"
+
+          # Nav labels live in main.cpp; without these the sidebar still reads
+          # General / Display / Battery over BetterCast content.
+          $main = 'liquid-bc/examples/example_win32_directx11/src/main.cpp'
+          $t = Get-Content $main -Raw
+          $t = $t.Replace(
+            'const char* navLabels[] = { "General", "Display", "Battery", "Storage", "Customize" };',
+            'const char* navLabels[] = { "Devices", "Hotspot", "Send", "Receive", "Material" };')
+          $t = $t.Replace(
+            'const char* pages[8] = { "General","Display","Battery","Storage","Customize","View Profile","Account Settings","Apps" };',
+            'const char* pages[8] = { "Devices","Hotspot","Send","Receive","Material","View Profile","Account Settings","Apps" };')
+          Set-Content $main $t -Encoding utf8
+          if ($t -notmatch 'Devices') { throw "nav label replacement did not apply" }
+
+          cmake -S liquid-bc -B build-spike -A x64
           cmake --build build-spike --config Release
+
+          $out = Get-ChildItem -Path build-spike -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
+          if (-not $out) { throw "the BetterCast build produced no exe" }
+          Rename-Item $out.FullName 'BetterCastGlassSpike.exe'
 
       - name: Collect
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
-          foreach ($name in 'liquidDX11.exe', 'BetterCastGlassSpike.exe') {
-            $exe = Get-ChildItem -Path build-ref, build-spike -Filter $name -Recurse -ErrorAction SilentlyContinue |
-                   Select-Object -First 1
-            if (-not $exe) { throw "$name was not produced" }
-            Write-Host "built: $name  $([math]::Round($exe.Length/1MB,1)) MB"
-            Copy-Item $exe.FullName out/
-          }
+          $ref = Get-ChildItem -Path build-ref -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
+          if (-not $ref) { throw "the reference build produced no exe" }
+          Copy-Item $ref.FullName out/
+          Write-Host "built: liquidDX11.exe  $([math]::Round($ref.Length/1MB,1)) MB"
+
+          $bc = Get-ChildItem -Path build-spike -Filter 'BetterCastGlassSpike.exe' -Recurse | Select-Object -First 1
+          if (-not $bc) { throw "the BetterCast build produced no exe" }
+          Copy-Item $bc.FullName out/
+          Write-Host "built: BetterCastGlassSpike.exe  $([math]::Round($bc.Length/1MB,1)) MB"
 
           # Both load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {
