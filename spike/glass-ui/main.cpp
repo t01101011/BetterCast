@@ -145,9 +145,7 @@ static void DrawBetterCastPage(int winW, int winH) {
     ImGui::NextColumn();
 
     // ── Device page ────────────────────────────────────────────────────────
-    ImGui::PushFont(nullptr);
     ImGui::TextUnformatted("Stephen's MacBook Air");
-    ImGui::PopFont();
     Glass::StatusPill("Available", IM_COL32(67, 224, 140, 255));
     ImGui::SameLine();
     ImGui::TextDisabled("192.168.254.111:51820");
@@ -229,10 +227,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_device, g_ctx);
 
-    Glass::Renderer glass;
+    static Glass::Renderer glass;
     if (!glass.Init(g_device, g_ctx)) {
         ::MessageBoxW(hwnd, L"Glass renderer failed to initialise.", L"Spike", MB_ICONERROR);
+        return 1;
     }
+
+    // Every Glass:: free function submits primitives through this global. Not
+    // setting it is why the first build exited instantly: BeginCard
+    // dereferenced a null renderer before a frame was ever presented.
+    Glass::g = &glass;
+
     g_backdrop.Init(g_device, g_ctx, hwnd);
     Glass::SetAccent(0.34f, 0.64f, 1.0f);   // BetterCast blue
 
@@ -289,6 +294,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         g_swapchain->Present(g_vsync ? 1 : 0, 0);
     }
 
+    Glass::g = nullptr;
     g_backdrop.Shutdown();
     glass.Shutdown();
     ImGui_ImplDX11_Shutdown();
