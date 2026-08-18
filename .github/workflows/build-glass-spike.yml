@@ -1,0 +1,66 @@
+name: Build Glass Spike (liquidDX11)
+
+# Spike, not product. Builds StephenLovino/liquidDX11 unmodified so the glass
+# material can be judged running on real hardware, and so the toolchain is
+# proven before any BetterCast UI is written against it.
+#
+# Deliberately step one of two. Writing a D3D11 + ImGui page against an API
+# that has never been compiled here would be guessing twice at once; this
+# proves the build, and the BetterCast page follows on a known-good base.
+#
+# Delete this file and the spike is gone - it touches nothing in BetterCast.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/windows-sender-latency-topology]
+    paths:
+      - '.github/workflows/build-glass-spike.yml'
+
+concurrency:
+  group: glass-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-spike:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out liquidDX11
+        uses: actions/checkout@v4
+        with:
+          repository: StephenLovino/liquidDX11
+          path: liquidDX11
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S liquidDX11 -B build -A x64
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake --build build --config Release
+
+      - name: Locate the executable
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem -Path build -Filter 'liquidDX11.exe' -Recurse |
+                 Select-Object -First 1
+          if (-not $exe) { throw "liquidDX11.exe was not produced" }
+          Write-Host "built: $($exe.FullName)  $([math]::Round($exe.Length/1MB,1)) MB"
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item $exe.FullName out/
+
+          # The app loads fonts and its glass.cfg from beside the binary.
+          foreach ($d in 'data', 'misc/fonts') {
+            $src = Join-Path 'liquidDX11' $d
+            if (Test-Path $src) { Copy-Item -Recurse $src out/ -ErrorAction SilentlyContinue }
+          }
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: liquidDX11-glass-spike
+          path: out/
+          if-no-files-found: error
