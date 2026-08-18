@@ -82,11 +82,19 @@ void SenderController::prepareDisplays() {
     if (!m_vdd || m_displaysPrepared) return;
     m_displaysPrepared = true;
 
-    // Without the primary's resolution in the driver's mode list, every virtual
-    // display comes up at the driver's 800x600 default and no later mode change
-    // can lift it — there is nothing better to switch to.
-    const QSize primary = VirtualDisplayVDD::primaryResolution();
-    m_vdd->ensureResolutionAdvertised(primary.width(), primary.height());
+    // Advertise the whole resolution menu, not just the primary's size.
+    //
+    // Without a size in the driver's mode list, a virtual display comes up at
+    // the driver's 800x600 default and no later mode change can lift it —
+    // there is nothing better to switch to.
+    //
+    // A virtual display can only be set to a mode vdd_settings.xml already
+    // lists, and updating that file needs elevation and restarts the driver.
+    // Writing every offered size once means switching a device's resolution
+    // later is a plain mode change — no UAC prompt, no flicker.
+    QVector<QSize> modes = VirtualDisplayVDD::commonResolutions();
+    modes.prepend(VirtualDisplayVDD::primaryResolution());
+    m_vdd->ensureResolutionsAdvertised(modes);
 
     m_vdd->ensureDisplayNodes(qMax(m_desiredPoolSize, kDisplayPoolSize));
 }
@@ -180,7 +188,8 @@ QString SenderController::claimDisplayFor(const QString& host) {
 
 bool SenderController::startSending(const QString& receiverHost, uint16_t port,
                                     int fps, int bitrateMbps,
-                                    const QString& displayName) {
+                                    const QString& displayName,
+                                    int width, int height) {
     if (receiverHost.isEmpty()) {
         emit error("No receiver address given");
         return false;
@@ -212,6 +221,8 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     s->port = port;
     s->fps = fps;
     s->bitrateMbps = bitrateMbps;
+    s->width = width;
+    s->height = height;
 
     // Explicit display wins; then the UI default if free; then claim a spare.
     s->displayName = displayName;
@@ -255,7 +266,10 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
     // Windows brings an extended virtual display up at the driver's 800x600
     // default. Raise it before capture starts, or the stream goes out at 800x600.
     if (m_vdd) {
-        const QSize target = VirtualDisplayVDD::primaryResolution();
+        // Per-device size when one was chosen, otherwise match the primary.
+        const QSize target = (s->width > 0 && s->height > 0)
+            ? QSize(s->width, s->height)
+            : VirtualDisplayVDD::primaryResolution();
         m_vdd->setVirtualDisplayResolution(s->displayName, target.width(), target.height());
     }
 

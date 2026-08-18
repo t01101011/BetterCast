@@ -27,9 +27,11 @@ public:
     // Start streaming to one receiver. `displayName` selects the monitor to
     // capture (e.g. "\\\\.\\DISPLAY21"); when empty the controller claims the
     // next virtual display not already in use by another session.
+    // width/height of 0 means "match the primary display".
     bool startSending(const QString& receiverHost, uint16_t port = 51820,
                       int fps = 30, int bitrateMbps = 8,
-                      const QString& displayName = QString());
+                      const QString& displayName = QString(),
+                      int width = 0, int height = 0);
 
     // Stop one receiver, or every receiver.
     void stopSending(const QString& receiverHost);
@@ -72,6 +74,8 @@ private:
         int outputIndex = 0;
         int fps = 30;
         int bitrateMbps = 8;
+        int width = 0;          // 0 = match the primary display
+        int height = 0;
         bool encoderReady = false;
 
         ScreenCapture* capture = nullptr;

@@ -140,6 +140,18 @@ public:
     // call it at startup, never mid-stream.
     bool ensureResolutionAdvertised(int width, int height);
 
+    // Advertise several modes in one pass.
+    //
+    // Every size a virtual display may be asked to run at has to be in
+    // vdd_settings.xml first, and writing that file needs elevation and
+    // restarts the driver. Doing it per device would mean a UAC prompt and a
+    // display flicker every time someone picked a different resolution, so the
+    // whole menu goes in once, before anything streams.
+    bool ensureResolutionsAdvertised(const QVector<QSize>& modes);
+
+    // The sizes offered in the per-device resolution picker.
+    static QVector<QSize> commonResolutions();
+
     // The primary display's current resolution, so virtual displays can default
     // to matching the real screen rather than the driver's 800x600.
     static QSize primaryResolution();

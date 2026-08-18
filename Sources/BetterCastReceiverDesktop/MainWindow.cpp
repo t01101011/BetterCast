@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "UpdateChecker.h"
 #include <QDesktopServices>
+#include <QPoint>
 #ifdef _WIN32
 #include "HotspotManager.h"
 #include "QrImage.h"
@@ -1840,7 +1841,8 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
             const int idx = indexOfDevice(device.name);
             const int fps = idx >= 0 ? m_devices[idx].fps : device.fps;
             const int bitrate = idx >= 0 ? m_devices[idx].bitrateMbps : device.bitrateMbps;
-            m_sender->startSending(device.host, device.port, fps, bitrate, QString());
+            m_sender->startSending(device.host, device.port, fps, bitrate, QString(),
+                                   device.width, device.height);
             onDeviceRowSelected(device.name);
         });
         btnRow->addWidget(sendBtn);
@@ -1879,6 +1881,26 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
     fpsRow->addStretch();
     qLayout->addLayout(fpsRow);
 
+    auto* resRow = new QHBoxLayout();
+    auto* resLabel = new QLabel("Resolution:");
+    resLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
+    resRow->addWidget(resLabel);
+    auto* resCombo = new QComboBox();
+    resCombo->addItem("Match this PC", QPoint(0, 0));
+    {
+        const QSize primary = VirtualDisplayVDD::primaryResolution();
+        for (const QSize& mode : VirtualDisplayVDD::commonResolutions()) {
+            QString label = QString("%1 x %2").arg(mode.width()).arg(mode.height());
+            if (mode == primary) label += "  (native)";
+            resCombo->addItem(label, QPoint(mode.width(), mode.height()));
+        }
+        const int wanted = resCombo->findData(QPoint(device.width, device.height));
+        resCombo->setCurrentIndex(wanted >= 0 ? wanted : 0);
+    }
+    resRow->addWidget(resCombo);
+    resRow->addStretch();
+    qLayout->addLayout(resRow);
+
     auto* brRow = new QHBoxLayout();
     auto* brLabel = new QLabel("Bitrate:");
     brLabel->setStyleSheet("font-size: 13px; color: palette(mid);");
@@ -1904,6 +1926,14 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
                 [this, deviceIdx](int v) {
                     if (deviceIdx >= m_devices.size()) return;
                     m_devices[deviceIdx].bitrateMbps = v;
+                    m_devices[deviceIdx].settingsCustomised = true;
+                });
+        connect(resCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+                [this, deviceIdx, resCombo](int) {
+                    if (deviceIdx >= m_devices.size()) return;
+                    const QPoint size = resCombo->currentData().toPoint();
+                    m_devices[deviceIdx].width  = size.x();
+                    m_devices[deviceIdx].height = size.y();
                     m_devices[deviceIdx].settingsCustomised = true;
                 });
     }

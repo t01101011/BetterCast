@@ -679,6 +679,73 @@ bool VirtualDisplayVDD::ensureResolutionAdvertised(int width, int height) {
     return true;
 }
 
+QVector<QSize> VirtualDisplayVDD::commonResolutions() {
+    // Enough to cover phones, tablets and laptops without turning the picker
+    // into a wall of numbers. The primary's own size is added on top by
+    // ensureResolutionsAdvertised, so a matching option is always present.
+    return {
+        QSize(3840, 2160),
+        QSize(2560, 1440),
+        QSize(1920, 1200),
+        QSize(1920, 1080),
+        QSize(1680, 1050),
+        QSize(1600, 900),
+        QSize(1440, 900),
+        QSize(1366, 768),
+        QSize(1280, 800),
+        QSize(1280, 720),
+        QSize(1024, 768),
+    };
+}
+
+bool VirtualDisplayVDD::ensureResolutionsAdvertised(const QVector<QSize>& modes) {
+    if (!m_vddInstalled) return false;
+
+    auto existing = readVddSettings();
+    auto alreadyListed = [&existing](const QSize& size) {
+        for (const auto& d : existing) {
+            if (d.width == size.width() && d.height == size.height()) return true;
+        }
+        return false;
+    };
+
+    QVector<QSize> missing;
+    for (const auto& size : modes) {
+        if (size.width() <= 0 || size.height() <= 0) continue;
+        if (alreadyListed(size)) continue;
+        // Guard against duplicates inside the requested set too.
+        bool dupe = false;
+        for (const auto& m : missing) {
+            if (m == size) { dupe = true; break; }
+        }
+        if (!dupe) missing.append(size);
+    }
+
+    if (missing.isEmpty()) return true;   // nothing to do, no driver restart
+
+    VDD_LOG(QString("VDD: Adding %1 display mode(s) to vdd_settings.xml so virtual "
+                    "displays can run at any of them without another restart")
+                .arg(missing.size()));
+
+    for (const auto& size : missing) {
+        existing.append({size.width(), size.height(), 60});
+    }
+
+    if (!writeVddSettings(existing)) {
+        VDD_LOG("VDD: Could not update the Virtual Display Driver settings file — "
+                "virtual displays will stay at the driver's default size");
+        emit error("Could not update the Virtual Display Driver settings file. "
+                   "BetterCast may need to run as administrator once.");
+        return false;
+    }
+
+    notifyDriverRefresh();
+    QThread::msleep(1500);
+    VDD_LOG(QString("VDD: Driver refreshed — %1 mode(s) now on offer")
+                .arg(existing.size()));
+    return true;
+}
+
 bool VirtualDisplayVDD::attachVirtualDisplay(const QString& deviceName,
                                              int width, int height, int refreshRate) {
 #ifdef _WIN32

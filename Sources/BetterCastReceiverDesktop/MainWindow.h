@@ -155,6 +155,10 @@ private:
         // first time a device is seen, then owned by that device.
         int fps = 60;
         int bitrateMbps = 20;
+        // 0x0 means "match this PC's primary display", which is what a virtual
+        // screen should default to. A phone often wants something smaller.
+        int width = 0;
+        int height = 0;
         bool settingsCustomised = false;
     };
     QVector<DeviceEntry> m_devices;
