@@ -16,6 +16,7 @@ on:
     branches: [fix/windows-sender-latency-topology]
     paths:
       - '.github/workflows/build-glass-spike.yml'
+      - 'spike/glass-ui/**'
 
 concurrency:
   group: glass-spike-${{ github.ref }}
@@ -32,27 +33,37 @@ jobs:
           repository: StephenLovino/liquidDX11
           path: liquidDX11
 
-      - name: Configure
-        shell: pwsh
-        run: |
-          cmake -S liquidDX11 -B build -A x64
+      - name: Check out BetterCast (for the spike sources)
+        uses: actions/checkout@v4
+        with:
+          path: bettercast
 
-      - name: Build
+      - name: Build liquidDX11 unmodified
         shell: pwsh
         run: |
-          cmake --build build --config Release
+          cmake -S liquidDX11 -B build-ref -A x64
+          cmake --build build-ref --config Release
 
-      - name: Locate the executable
+      - name: Build the BetterCast device page in glass
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path build -Filter 'liquidDX11.exe' -Recurse |
-                 Select-Object -First 1
-          if (-not $exe) { throw "liquidDX11.exe was not produced" }
-          Write-Host "built: $($exe.FullName)  $([math]::Round($exe.Length/1MB,1)) MB"
+          cmake -S bettercast/spike/glass-ui -B build-spike -A x64 `
+                -DLIQUID_DIR="${{ github.workspace }}/liquidDX11"
+          cmake --build build-spike --config Release
+
+      - name: Collect
+        shell: pwsh
+        run: |
           New-Item -ItemType Directory -Force out | Out-Null
-          Copy-Item $exe.FullName out/
+          foreach ($name in 'liquidDX11.exe', 'BetterCastGlassSpike.exe') {
+            $exe = Get-ChildItem -Path build-ref, build-spike -Filter $name -Recurse -ErrorAction SilentlyContinue |
+                   Select-Object -First 1
+            if (-not $exe) { throw "$name was not produced" }
+            Write-Host "built: $name  $([math]::Round($exe.Length/1MB,1)) MB"
+            Copy-Item $exe.FullName out/
+          }
 
-          # The app loads fonts and its glass.cfg from beside the binary.
+          # Both load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {
             $src = Join-Path 'liquidDX11' $d
             if (Test-Path $src) { Copy-Item -Recurse $src out/ -ErrorAction SilentlyContinue }
