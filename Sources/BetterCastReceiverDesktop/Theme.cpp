@@ -101,7 +101,7 @@ QString stylesheet(const Palette& p) {
         background-color: %SURFACE%;
         color: %TEXT%;
         border: 1px solid %BORDER%;
-        border-radius: 6px;
+        border-radius: %CTRL_RADIUS%;
         padding: 7px 10px;
         font-size: 13px;
         selection-background-color: %ACCENT%;
@@ -112,7 +112,7 @@ QString stylesheet(const Palette& p) {
         background-color: %SURFACE%;
         color: %TEXT%;
         border: 1px solid %BORDER_STRONG%;
-        border-radius: 6px;
+        border-radius: %CTRL_RADIUS%;
         padding: 8px 16px;
         font-size: 13px;
     }
@@ -123,7 +123,7 @@ QString stylesheet(const Palette& p) {
     QGroupBox {
         color: %TEXT_DIM%;
         border: 1px solid %BORDER%;
-        border-radius: 10px;
+        border-radius: %CARD_RADIUS%;
         margin-top: 20px;
         padding: 26px 18px 16px 18px;
         font-size: 12px;
@@ -193,9 +193,22 @@ QString stylesheet(const Palette& p) {
         .replace("%SURFACE_ALT%", p.surfaceAlt)
         // Cards sit slightly above the backdrop so Mica reads as depth rather
         // than a flat wash. Kept subtle: too much and text contrast suffers.
-        .replace("%SURFACE_GLASS%", p.glass   ? "rgba(255, 255, 255, 0.10)"
-                                   : p.isDark ? "rgba(255, 255, 255, 0.03)"
-                                              : "rgba(255, 255, 255, 0.55)")
+        // A top-lit gradient rather than a flat wash. Real glass is brighter
+        // where the light meets it, and that single cue does more to make a
+        // panel read as a material than any amount of extra transparency.
+        // qlineargradient is as close to a specular highlight as a Qt
+        // stylesheet gets — refraction and chromatic edges need custom
+        // painting, which is the line between this and a shader-based UI.
+        .replace("%SURFACE_GLASS%", p.glass
+            ? "qlineargradient(x1:0, y1:0, x2:0, y2:1, "
+              "stop:0 rgba(255,255,255,32), stop:0.45 rgba(255,255,255,18), "
+              "stop:1 rgba(255,255,255,10))"
+            : p.isDark ? "rgba(255, 255, 255, 0.03)"
+                       : "rgba(255, 255, 255, 0.55)")
+        // Concentric: cards sit inside the window, controls inside cards, so
+        // each radius steps down rather than every corner using one value.
+        .replace("%CARD_RADIUS%", p.glass ? "18px" : "10px")
+        .replace("%CTRL_RADIUS%", p.glass ? "10px" : "6px")
         .replace("%SURFACE%", p.surface)
         .replace("%BORDER_STRONG%", p.borderStrong)
         .replace("%BORDER%", p.border)

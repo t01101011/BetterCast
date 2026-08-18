@@ -118,6 +118,11 @@ inline Palette glassPalette() {
     p.windowSolid  = "#1a1a1a";
     p.surfaceSolid = "#2f2f2f";
     p.glass        = true;
+    // Brighter rims than the flat themes. On glass the border is doing the work
+    // an edge highlight would do on a real material, so it has to read against
+    // whatever desktop is behind it rather than against a known fill.
+    p.border       = "rgba(255, 255, 255, 0.18)";
+    p.borderStrong = "rgba(255, 255, 255, 0.30)";
     p.isDark       = true;
     return p;
 }
