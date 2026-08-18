@@ -21,6 +21,7 @@
 #include <QMetaObject>
 #include <QPointer>
 
+#include <stdexcept>
 #include <thread>
 
 #ifdef _WIN32
@@ -37,10 +38,15 @@ QString hstr(const winrt::hstring& s) {
 // Build a manager for whatever connection is currently providing internet.
 // Throws if there is no such profile or the platform refuses — every caller
 // runs this inside a try/catch and reports through Info::error.
+//
+// std::runtime_error rather than winrt::hresult_error for the missing-profile
+// case: the HRESULT constants live in winerror.h, which WIN32_LEAN_AND_MEAN
+// keeps out, and inventing an HRESULT to describe "the user has no network"
+// buys nothing over a plain message.
 NetworkOperatorTetheringManager makeManager() {
     auto profile = NetworkInformation::GetInternetConnectionProfile();
     if (!profile) {
-        throw winrt::hresult_error(E_FAIL, L"No active internet connection to share");
+        throw std::runtime_error("No active network connection to share");
     }
     return NetworkOperatorTetheringManager::CreateFromConnectionProfile(profile);
 }
@@ -67,6 +73,9 @@ HotspotManager::Info HotspotManager::query() const {
     } catch (const winrt::hresult_error& e) {
         info.supported = false;
         info.error     = hstr(e.message());
+    } catch (const std::exception& e) {
+        info.supported = false;
+        info.error     = QString::fromUtf8(e.what());
     } catch (...) {
         info.supported = false;
         info.error     = QStringLiteral("Unknown error querying Mobile Hotspot");
@@ -104,6 +113,8 @@ void runOffThread(QPointer<HotspotManager> owner, Op op) {
             }
         } catch (const winrt::hresult_error& e) {
             error = hstr(e.message());
+        } catch (const std::exception& e) {
+            error = QString::fromUtf8(e.what());
         } catch (...) {
             error = QStringLiteral("Unknown Mobile Hotspot error");
         }

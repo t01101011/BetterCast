@@ -130,6 +130,20 @@ set(HEADERS
 if(WIN32)
     list(APPEND SOURCES HotspotManager.cpp)
     list(APPEND HEADERS HotspotManager.h)
+
+    # This one file compiles as C++20 while the rest of the project stays on 17.
+    #
+    # C++/WinRT's base.h reaches for coroutine support, and under /std:c++17 that
+    # means <experimental/coroutine>, which current MSVC refuses outright:
+    #   "error STL1011: ... deprecated by Microsoft and will be REMOVED SOON".
+    # C++20 routes it to the standard <coroutine> instead. Silencing the error
+    # with _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS would only defer
+    # the same break, and raising the whole project to C++20 is a far wider
+    # change than one WinRT wrapper justifies.
+    if(MSVC)
+        set_source_files_properties(HotspotManager.cpp PROPERTIES
+            COMPILE_OPTIONS "/std:c++20")
+    endif()
 endif()
 
 # Sender mode sources
