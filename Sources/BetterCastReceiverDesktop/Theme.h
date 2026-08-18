@@ -100,7 +100,14 @@ inline Palette lightPalette() {
 // #888 is readable on a fixed #1a1a1a but disappears over a photo.
 inline Palette glassPalette() {
     Palette p     = darkPalette();
-    p.window       = "transparent";
+    // Semi-opaque, NOT transparent.
+    //
+    // A fully transparent window paints nothing, so Qt never clears the
+    // backing store and every page of the stack accumulates on top of the
+    // last — the whole UI rendered at once, overlapping. A translucent wash
+    // covers every pixel each frame (clearing it) while still letting the
+    // Acrylic backdrop read through at roughly a quarter strength.
+    p.window       = "rgba(24, 24, 27, 0.72)";
     p.sidebar      = "rgba(255, 255, 255, 0.04)";
     p.surface      = "rgba(255, 255, 255, 0.07)";
     p.surfaceHover = "rgba(255, 255, 255, 0.14)";

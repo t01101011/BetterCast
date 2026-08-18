@@ -241,8 +241,10 @@ void applyWindowBackdrop(QWidget* window, const Palette& p) {
     //
     // Qt may only honour this at window creation, so switching into or out of
     // glass can need a restart to take full effect.
+    // WA_TranslucentBackground alone. WA_NoSystemBackground additionally stops
+    // Qt clearing the buffer between frames, which is what smeared every page
+    // of the stack over every other one.
     window->setAttribute(Qt::WA_TranslucentBackground, p.glass);
-    window->setAttribute(Qt::WA_NoSystemBackground, p.glass);
 #else
     Q_UNUSED(window); Q_UNUSED(p);
 #endif
