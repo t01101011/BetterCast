@@ -1,14 +1,15 @@
 name: Build Glass Spike (liquidDX11)
 
-# Spike, not product. Two executables:
+# Two executables, plus an installer:
 #
-#   liquidDX11.exe          - the reference, unmodified, for comparison
-#   BetterCastGlassSpike.exe - BetterCast's pages in that shell, driving the
-#                              real Qt core in-process
+#   liquidDX11.exe      - the reference, unmodified, for comparing against
+#   BetterCastGlass.exe - BetterCast's pages in that shell, driving the real
+#                         Qt core in-process
 #
-# The second one exists to answer the architecture question rather than argue
-# it: whether BetterCast's own ServiceDiscovery, and an OpenGL widget like the
-# one the receive path renders through, survive inside a D3D11 render loop.
+# The second one began as a spike, to answer the architecture question rather
+# than argue it: whether BetterCast's own ServiceDiscovery, and an OpenGL
+# widget like the one the receive path renders through, survive inside a D3D11
+# render loop. They do, so it now ships as an installer rather than a zip.
 #
 # Overlay rather than reimplement. liquidDX11's layout lives in its main.cpp -
 # fonts at set sizes, a scale factor threaded through every width, panel
@@ -36,6 +37,9 @@ env:
   # workflow's vcpkg cache instead of building FFmpeg a second time.
   VCPKG_SPEC: 'ffmpeg[x264,nvcodec,amf]:x64-windows'
   VCPKG_CACHE_TAG: 'ffmpeg-x264-nvcodec-amf-v1'
+  # Kept in step with build-windows-receiver.yml on purpose: a machine with both
+  # apps installed should not end up with two different display drivers.
+  VDD_VERSION: '25.7.23'
 
 jobs:
   build-spike:
@@ -243,6 +247,28 @@ jobs:
           Set-Content $main $t -Encoding utf8
           Write-Host "main.cpp patched: bridge, entry point, pump, icon, account, dock, mark, splash"
 
+          # The account state behind the profile pages. main.cpp's chip was
+          # already patched, but the name and email it edits live here, and
+          # they are liquidDX11's author's - so the profile page still
+          # introduced this PC as somebody else.
+          #
+          # ui_state.inc is included inside main(), after the bridge is up, so
+          # a statement here runs exactly once with the real values available.
+          $state = 'liquid-bc/examples/example_win32_directx11/src/app/ui_state.inc'
+          $u = (Get-Content $state -Raw).Replace([string][char]13 + $lf, $lf)
+          $acctNew = @(
+            '    static char  acctName[64] = {}, acctEmail[64] = {};',
+            '    std::snprintf(acctName,  sizeof(acctName),  "%s", BetterCastBridge::userName().c_str());',
+            '    std::snprintf(acctEmail, sizeof(acctEmail), "%s", BetterCastBridge::userHandle().c_str());'
+          ) -join $lf
+          $before = $u
+          $u = $u.Replace(
+            '    static char  acctName[64] = "poncipp", acctEmail[64] = "@pondot";',
+            $acctNew)
+          if ($u -eq $before) { throw "account state patch did not apply" }
+          Set-Content $state $u -Encoding utf8
+          Write-Host "ui_state.inc patched: the account is this PC"
+
       - name: Add the BetterCast core to the spike target
         shell: pwsh
         run: |
@@ -336,7 +362,7 @@ jobs:
 
           $out = Get-ChildItem -Path build-spike -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
           if (-not $out) { throw "the BetterCast build produced no exe" }
-          Rename-Item $out.FullName 'BetterCastGlassSpike.exe'
+          Rename-Item $out.FullName 'BetterCastGlass.exe'
 
       - name: Collect
         shell: pwsh
@@ -353,15 +379,15 @@ jobs:
           Copy-Item $ref.FullName out/
           Write-Host "built: liquidDX11.exe  $([math]::Round($ref.Length/1MB,1)) MB"
 
-          $bc = Get-ChildItem -Path build-spike -Filter 'BetterCastGlassSpike.exe' -Recurse | Select-Object -First 1
+          $bc = Get-ChildItem -Path build-spike -Filter 'BetterCastGlass.exe' -Recurse | Select-Object -First 1
           if (-not $bc) { throw "the BetterCast build produced no exe" }
           Copy-Item $bc.FullName out/
-          Write-Host "built: BetterCastGlassSpike.exe  $([math]::Round($bc.Length/1MB,1)) MB"
+          Write-Host "built: BetterCastGlass.exe  $([math]::Round($bc.Length/1MB,1)) MB"
 
           # Qt runtime beside the binary, or the spike will not start on a
           # machine without Qt on PATH - which is every machine but the runner.
           & "$env:Qt6_DIR/bin/windeployqt.exe" --release --no-translations `
-            --no-system-d3d-compiler --no-opengl-sw "out/BetterCastGlassSpike.exe"
+            --no-system-d3d-compiler --no-opengl-sw "out/BetterCastGlass.exe"
 
           # FFmpeg's DLLs too. windeployqt only knows about Qt, so without this
           # the spike dies at startup on "avcodec-61.dll was not found" - which
@@ -454,6 +480,86 @@ jobs:
             $src = Join-Path 'liquidDX11' $d
             if (Test-Path $src) { Copy-Item -Recurse $src out/ -ErrorAction SilentlyContinue }
           }
+
+      - name: Download Virtual Display Driver (VDD)
+        shell: pwsh
+        run: |
+          # Same release the shipping installer bundles, so a machine with both
+          # installed is not being handed two different drivers.
+          $vddTag = '${{ env.VDD_VERSION }}'
+          $baseUrl = "https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/$vddTag"
+          New-Item -ItemType Directory -Force vdd | Out-Null
+          try {
+            Invoke-WebRequest "$baseUrl/VirtualDisplayDriver-x86.Driver.Only.zip" `
+              -OutFile 'vdd-driver.zip' -MaximumRedirection 5
+            Expand-Archive 'vdd-driver.zip' -DestinationPath 'vdd-driver-extract' -Force
+            Get-ChildItem 'vdd-driver-extract' -Recurse -File |
+              ForEach-Object { Copy-Item $_.FullName 'vdd/' -Force }
+
+            Invoke-WebRequest "$baseUrl/VDD.Control.$vddTag.zip" `
+              -OutFile 'vdd-control.zip' -MaximumRedirection 5
+            Expand-Archive 'vdd-control.zip' -DestinationPath 'vdd-control-extract' -Force
+            Get-ChildItem 'vdd-control-extract' -Recurse -File |
+              ForEach-Object { Copy-Item $_.FullName 'vdd/' -Force }
+
+            Write-Host "VDD: $((Get-ChildItem 'vdd' -File).Count) files"
+          } catch {
+            # Not fatal: the installer's VDD section is optional, and an app
+            # without it still receives and still mirrors. It cannot extend.
+            Write-Host "WARNING: could not fetch VDD - the installer will not bundle it: $_"
+          }
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          $nsisVersion = '3.10'
+          Invoke-WebRequest "https://github.com/nicehash/NSIS/releases/download/v$nsisVersion/nsis-$nsisVersion.zip" `
+            -OutFile 'nsis.zip'
+          Expand-Archive 'nsis.zip' -DestinationPath 'C:/nsis' -Force
+          $nsisDir = Get-ChildItem 'C:/nsis' -Directory | Select-Object -First 1
+          if ($nsisDir) { echo "$($nsisDir.FullName)" >> $env:GITHUB_PATH }
+          else          { echo 'C:/nsis' >> $env:GITHUB_PATH }
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          # NSIS resolves File paths relative to the .nsi, so everything it
+          # references is staged beside a copy of the script.
+          $stage = 'installer-stage'
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          Copy-Item 'bettercast/spike/glass-app/installer.nsi' $stage
+          Copy-Item 'out' "$stage/artifact" -Recurse
+          Copy-Item 'out/appicon.ico' $stage           # MUI_ICON, beside the script
+          if (Test-Path 'vdd') { Copy-Item 'vdd' "$stage/vdd" -Recurse }
+
+          # The unmodified reference build is for comparing against, not for
+          # shipping to anyone.
+          Remove-Item "$stage/artifact/liquidDX11.exe" -ErrorAction SilentlyContinue
+
+          # Version from CMakeLists, the same source the About box and the
+          # update checker read, so an installer can never claim a version the
+          # app disagrees with.
+          $verLine = Get-Content 'bettercast/Sources/BetterCastReceiverDesktop/CMakeLists.txt' |
+                     Where-Object { $_ -like 'project(BetterCastReceiver VERSION*' }
+          if (-not $verLine) { throw "could not read the version out of CMakeLists.txt" }
+          $bcVersion = ($verLine -split ' ')[2].TrimEnd(')')
+
+          Push-Location $stage
+          makensis /DPRODUCT_VERSION="$bcVersion" installer.nsi
+          if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
+          Pop-Location
+
+          $setup = Get-ChildItem "$stage/BetterCastGlass-Setup-*.exe" | Select-Object -First 1
+          if (-not $setup) { throw "makensis reported success but produced no installer" }
+          Move-Item $setup.FullName '.'
+          Write-Host "built: $($setup.Name)  $([math]::Round($setup.Length/1MB,1)) MB"
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BetterCastGlass-Setup-Windows-x64
+          path: BetterCastGlass-Setup-*.exe
+          if-no-files-found: error
 
       - name: Upload
         uses: actions/upload-artifact@v4
