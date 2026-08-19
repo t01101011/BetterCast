@@ -190,6 +190,8 @@ jobs:
             "    `"$core/VideoDecoder.h`"",
             "    `"$core/VideoRenderer.cpp`"",
             "    `"$core/VideoRenderer.h`"",
+            "    `"$core/AudioDecoder.cpp`"",
+            "    `"$core/AudioDecoder.h`"",
             "    `"$core/sender/SenderController.cpp`"",
             "    `"$core/sender/SenderController.h`"",
             "    `"$core/sender/VideoEncoderFF.cpp`"",
