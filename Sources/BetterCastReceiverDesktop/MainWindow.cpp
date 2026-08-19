@@ -91,9 +91,52 @@ static QListWidgetItem* addSidebarItem(QListWidget* list, const QString& glyph,
 
 // ─── Card widget helper ─────────────────────────────────────────────────────────
 
+// Panel, in the visual language of StephenLovino/liquidDX11.
+//
+// Its titles are uppercase, small and widely letter-spaced, which is most of
+// what makes a stack of panels read as one designed surface rather than a
+// column of boxes. Neither is reachable from a Qt stylesheet - there is no
+// text-transform and no letter-spacing property - so both are done here.
 static QGroupBox* makeCard(const QString& title) {
-    auto* card = new QGroupBox(title);
+    auto* card = new QGroupBox(title.toUpper());
+
+    QFont f = card->font();
+    f.setPointSizeF(f.pointSizeF() * 0.86);
+    f.setWeight(QFont::DemiBold);
+    f.setLetterSpacing(QFont::PercentageSpacing, 112.0);
+    card->setFont(f);
+
     return card;
+}
+
+// One label/value line, the row liquidDX11 uses for everything it states
+// rather than asks: label dim on the left, value bright on the right, a
+// hairline between rows.
+//
+// Returns the value label so callers can keep updating it, which is why this
+// builds widgets instead of formatting a string into one QLabel.
+static QLabel* addStatRow(QVBoxLayout* into, const QString& label,
+                          const QString& value = QString()) {
+    auto* row = new QWidget();
+    row->setObjectName("statRow");
+
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 6, 0, 6);
+    h->setSpacing(12);
+
+    auto* l = new QLabel(label);
+    l->setStyleSheet("font-size: 12.5px; color: palette(mid); background: transparent;");
+    h->addWidget(l);
+    h->addStretch();
+
+    auto* v = new QLabel(value);
+    v->setStyleSheet("font-size: 12.5px; color: palette(window-text); background: transparent;");
+    v->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    v->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    h->addWidget(v);
+
+    into->addWidget(row);
+    return v;
 }
 
 // ─── Constructor ────────────────────────────────────────────────────────────────
@@ -433,7 +476,7 @@ void MainWindow::setupUi() {
     donateBtn->setToolTip("Open the BetterCast donation page on Whop");
     donateBtn->setStyleSheet(
         "QPushButton { background: transparent; border: 1px solid palette(mid); "
-        "border-radius: 8px; padding: 7px 10px; font-size: 12px; }"
+        "border-radius: 999px; padding: 7px 10px; font-size: 12px; }"
         "QPushButton:hover { background: rgba(224, 86, 138, 0.12); }");
     connect(donateBtn, &QPushButton::clicked, this, []() {
         QDesktopServices::openUrl(QUrl("https://whop.com/bettercast/bettercast-donate/"));
@@ -763,7 +806,7 @@ void MainWindow::setupSendPage() {
     m_recheckVddBtn->setVisible(!vddInstalled);
     m_recheckVddBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: #4da6ff; padding: 6px 14px; "
-        "border-radius: 5px; font-size: 12px; border: 1px solid #4da6ff; }"
+        "border-radius: 999px; font-size: 12px; border: 1px solid #4da6ff; }"
         "QPushButton:hover { background-color: #1a3a5c; }");
     connect(m_recheckVddBtn, &QPushButton::clicked, this, [this]() {
         if (!m_sender || !m_sender->vdd()) return;
@@ -813,7 +856,7 @@ void MainWindow::setupSendPage() {
     m_createVddBtn->setEnabled(vddInstalled);
     m_createVddBtn->setStyleSheet(
         "QPushButton { background-color: #4caf50; color: #ffffff; font-weight: bold; "
-        "padding: 8px 18px; border-radius: 6px; border: none; }"
+        "padding: 8px 18px; border-radius: 999px; border: none; }"
         "QPushButton:hover { background-color: #66bb6a; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_createVddBtn, &QPushButton::clicked, this, &MainWindow::onCreateVirtualDisplay);
@@ -826,7 +869,7 @@ void MainWindow::setupSendPage() {
     m_removeVddBtn->setEnabled(false);
     m_removeVddBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 8px 18px; "
-        "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 13px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_removeVddBtn, &QPushButton::clicked, this, &MainWindow::onRemoveVirtualDisplay);
@@ -851,7 +894,7 @@ void MainWindow::setupSendPage() {
     m_applyTopologyBtn->setEnabled(vddInstalled);
     m_applyTopologyBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 8px 18px; "
-        "border-radius: 6px; font-size: 13px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 13px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_applyTopologyBtn, &QPushButton::clicked, this, &MainWindow::onExtendDisplays);
@@ -891,7 +934,7 @@ void MainWindow::setupSendPage() {
     auto* refreshBtn = new QPushButton("Refresh");
     refreshBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
-        "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(refreshBtn, &QPushButton::clicked, this, &MainWindow::onRefreshMonitors);
     monRow->addWidget(refreshBtn);
@@ -992,7 +1035,7 @@ void MainWindow::setupSendPage() {
     m_sendBtn = new QPushButton("Send Screen");
     m_sendBtn->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
-        "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
+        "font-size: 14px; padding: 10px 24px; border-radius: 999px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_sendBtn, &QPushButton::clicked, this, &MainWindow::onSendScreenClicked);
@@ -1002,7 +1045,7 @@ void MainWindow::setupSendPage() {
     m_stopSendBtn->setEnabled(false);
     m_stopSendBtn->setStyleSheet(
         "QPushButton { background-color: #d32f2f; color: #ffffff; font-weight: bold; "
-        "font-size: 14px; padding: 10px 24px; border-radius: 8px; border: none; }"
+        "font-size: 14px; padding: 10px 24px; border-radius: 999px; border: none; }"
         "QPushButton:hover { background-color: #e53935; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_stopSendBtn, &QPushButton::clicked, this, &MainWindow::onStopSendingClicked);
@@ -1090,7 +1133,7 @@ void MainWindow::setupReceivePage() {
     m_connectBtn = new QPushButton("Connect");
     m_connectBtn->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
-        "padding: 8px 20px; border-radius: 6px; border: none; }"
+        "padding: 8px 20px; border-radius: 999px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_connectBtn, &QPushButton::clicked, this, &MainWindow::onConnectClicked);
@@ -1109,7 +1152,7 @@ void MainWindow::setupReceivePage() {
     m_adbBtn = new QPushButton("Connect to Android (ADB)");
     m_adbBtn->setStyleSheet(
         "QPushButton { background-color: #3ddc84; color: black; font-weight: bold; "
-        "padding: 10px 20px; border-radius: 8px; font-size: 14px; border: none; }"
+        "padding: 10px 20px; border-radius: 999px; font-size: 14px; border: none; }"
         "QPushButton:hover { background-color: #50e898; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_adbBtn, &QPushButton::clicked, this, &MainWindow::onAdbConnectClicked);
@@ -1175,7 +1218,7 @@ void MainWindow::setupHotspotPage() {
     m_hsToggle = new QPushButton("Start Hotspot");
     m_hsToggle->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
-        "padding: 10px 20px; border-radius: 8px; font-size: 14px; border: none; }"
+        "padding: 10px 20px; border-radius: 999px; font-size: 14px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }"
         "QPushButton:disabled { background-color: #2a2a2a; color: palette(mid); }");
     connect(m_hsToggle, &QPushButton::clicked, this, [this]() {
@@ -1401,7 +1444,7 @@ void MainWindow::setupSettingsPage() {
     m_updateBtn = new QPushButton(tr("Download Update"));
     m_updateBtn->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
-        "padding: 8px 20px; border-radius: 6px; border: none; }"
+        "padding: 8px 20px; border-radius: 999px; border: none; }"
         "QPushButton:hover { background-color: #1a8ae8; }");
     m_updateBtn->setVisible(false);
     connect(m_updateBtn, &QPushButton::clicked, this, [this]() {
@@ -1519,7 +1562,7 @@ void MainWindow::setupLogsPage() {
     auto* reportBtn = new QPushButton("Report Issue");
     reportBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
-        "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(reportBtn, &QPushButton::clicked, this, &MainWindow::onReportIssue);
     titleRow->addWidget(reportBtn);
@@ -1527,7 +1570,7 @@ void MainWindow::setupLogsPage() {
     auto* copyBtn = new QPushButton("Copy");
     copyBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
-        "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(copyBtn, &QPushButton::clicked, this, &MainWindow::onCopyLogs);
     titleRow->addWidget(copyBtn);
@@ -1535,7 +1578,7 @@ void MainWindow::setupLogsPage() {
     auto* clearBtn = new QPushButton("Clear");
     clearBtn->setStyleSheet(
         "QPushButton { background-color: #333; color: palette(mid); padding: 6px 14px; "
-        "border-radius: 6px; font-size: 12px; border: 1px solid #555; }"
+        "border-radius: 999px; font-size: 12px; border: 1px solid #555; }"
         "QPushButton:hover { background-color: #444; }");
     connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearLogs);
     titleRow->addWidget(clearBtn);
@@ -1904,7 +1947,25 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         delete child;
     }
 
-    auto* card = makeCard("Stream to this device");
+    // State first, as label/value rows, before anything asks the user for a
+    // decision. That ordering is liquidDX11's, and it is what makes a page
+    // read as a status surface rather than a form.
+    auto* infoCard = makeCard(tr("Connection"));
+    auto* infoLayout = new QVBoxLayout(infoCard);
+    infoLayout->setSpacing(0);
+    addStatRow(infoLayout, tr("Address"),
+               QString("%1:%2").arg(device.host).arg(device.port));
+    addStatRow(infoLayout, tr("Status"),
+               device.connected ? tr("Connected") : tr("Available"));
+    addStatRow(infoLayout, tr("Resolution"),
+               (device.width > 0 && device.height > 0)
+                   ? QString("%1 x %2").arg(device.width).arg(device.height)
+                   : tr("Match this PC"));
+    addStatRow(infoLayout, tr("Frame rate"), QString("%1 FPS").arg(device.fps));
+    addStatRow(infoLayout, tr("Bitrate"), QString("%1 Mbps").arg(device.bitrateMbps));
+    bodyLayout->addWidget(infoCard);
+
+    auto* card = makeCard(tr("Stream to this device"));
     auto* cardLayout = new QVBoxLayout(card);
     cardLayout->setSpacing(10);
 
@@ -1928,7 +1989,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         auto* stopBtn = new QPushButton("Stop Streaming Here");
         stopBtn->setStyleSheet(
             "QPushButton { background-color: #d32f2f; color: #ffffff; font-weight: bold; "
-            "padding: 9px 20px; border-radius: 6px; border: none; }"
+            "padding: 9px 20px; border-radius: 999px; border: none; }"
             "QPushButton:hover { background-color: #e34a4a; }");
         connect(stopBtn, &QPushButton::clicked, this, [this, device]() {
             m_sender->stopSending(device.host);   // other receivers keep streaming
@@ -1940,7 +2001,7 @@ void MainWindow::populateDevicePage(const DeviceEntry& device) {
         sendBtn->setIcon(Icons::icon(Icons::send(), QColor("white")));
         sendBtn->setStyleSheet(
             "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
-            "padding: 9px 20px; border-radius: 6px; border: none; }"
+            "padding: 9px 20px; border-radius: 999px; border: none; }"
             "QPushButton:hover { background-color: #1a88e0; }");
         connect(sendBtn, &QPushButton::clicked, this, [this, device]() {
             if (m_sendHostEdit) m_sendHostEdit->setText(device.host);

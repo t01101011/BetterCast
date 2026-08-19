@@ -134,7 +134,17 @@ QString stylesheet(const Palette& p) {
         subcontrol-origin: margin;
         left: 16px;
         padding: 0 6px;
-        color: %TEXT_DIM%;
+        color: %TEXT_FAINT%;
+    }
+
+    /* Label/value rows, separated by a hairline rather than boxed. The last
+       row in a panel drops its rule so the panel does not end on a line. */
+    QWidget#statRow {
+        border-bottom: 1px solid %BORDER%;
+        background: transparent;
+    }
+    QWidget#statRow:last-child {
+        border-bottom: none;
     }
 
     QTextEdit {
@@ -207,8 +217,12 @@ QString stylesheet(const Palette& p) {
                        : "rgba(255, 255, 255, 0.55)")
         // Concentric: cards sit inside the window, controls inside cards, so
         // each radius steps down rather than every corner using one value.
-        .replace("%CARD_RADIUS%", p.glass ? "18px" : "10px")
-        .replace("%CTRL_RADIUS%", p.glass ? "10px" : "6px")
+        // Pills, not rounded rectangles. liquidDX11's controls are fully
+        // round, and that single radius does more to carry its look than any
+        // amount of translucency - so it applies to every theme, not just
+        // glass. This is a redesign, not a glass-only skin.
+        .replace("%CARD_RADIUS%", "18px")
+        .replace("%CTRL_RADIUS%", "999px")
         .replace("%SURFACE%", p.surface)
         .replace("%BORDER_STRONG%", p.borderStrong)
         .replace("%BORDER%", p.border)

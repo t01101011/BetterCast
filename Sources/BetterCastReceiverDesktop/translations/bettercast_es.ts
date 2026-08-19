@@ -103,5 +103,41 @@
         <source>What's New</source>
         <translation>Novedades</translation>
     </message>
+    <message>
+        <source>Address</source>
+        <translation>Dirección</translation>
+    </message>
+    <message>
+        <source>Status</source>
+        <translation>Estado</translation>
+    </message>
+    <message>
+        <source>Connected</source>
+        <translation>Conectado</translation>
+    </message>
+    <message>
+        <source>Available</source>
+        <translation>Disponible</translation>
+    </message>
+    <message>
+        <source>Resolution</source>
+        <translation>Resolución</translation>
+    </message>
+    <message>
+        <source>Match this PC</source>
+        <translation>Igual que este PC</translation>
+    </message>
+    <message>
+        <source>Frame rate</source>
+        <translation>Fotogramas por segundo</translation>
+    </message>
+    <message>
+        <source>Bitrate</source>
+        <translation>Tasa de bits</translation>
+    </message>
+    <message>
+        <source>Stream to this device</source>
+        <translation>Transmitir a este dispositivo</translation>
+    </message>
 </context>
 </TS>

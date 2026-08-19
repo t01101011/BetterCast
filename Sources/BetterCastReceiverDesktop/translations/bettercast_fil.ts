@@ -103,5 +103,41 @@
         <source>What's New</source>
         <translation>Ano ang Bago</translation>
     </message>
+    <message>
+        <source>Address</source>
+        <translation>Address</translation>
+    </message>
+    <message>
+        <source>Status</source>
+        <translation>Katayuan</translation>
+    </message>
+    <message>
+        <source>Connected</source>
+        <translation>Nakakonekta</translation>
+    </message>
+    <message>
+        <source>Available</source>
+        <translation>Available</translation>
+    </message>
+    <message>
+        <source>Resolution</source>
+        <translation>Resolusyon</translation>
+    </message>
+    <message>
+        <source>Match this PC</source>
+        <translation>Tumugma sa PC na ito</translation>
+    </message>
+    <message>
+        <source>Frame rate</source>
+        <translation>Frame rate</translation>
+    </message>
+    <message>
+        <source>Bitrate</source>
+        <translation>Bitrate</translation>
+    </message>
+    <message>
+        <source>Stream to this device</source>
+        <translation>I-stream sa device na ito</translation>
+    </message>
 </context>
 </TS>
