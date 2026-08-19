@@ -28,6 +28,10 @@ public:
     // capture (e.g. "\\\\.\\DISPLAY21"); when empty the controller claims the
     // next virtual display not already in use by another session.
     // width/height of 0 means "match the primary display".
+    //
+    // Naming a display the user is actually looking at means mirroring rather
+    // than extending: that display is captured as-is, never resized, and never
+    // swapped for a spare virtual one.
     bool startSending(const QString& receiverHost, uint16_t port = 51820,
                       int fps = 30, int bitrateMbps = 8,
                       const QString& displayName = QString(),
@@ -86,6 +90,10 @@ private:
 
     Session* findSession(const QString& host) const;
     void destroySession(Session* s);
+    // Whether a display is one of the driver's, as opposed to a monitor the
+    // user is actually looking at. Naming a real monitor is a mirror request
+    // and has to be treated differently — see startSending.
+    bool isVirtualDisplay(const QString& displayName) const;
     // Choose a virtual display no other session is streaming, creating one if
     // none is free. Returns an empty string when nothing suitable exists.
     QString claimDisplayFor(const QString& host);

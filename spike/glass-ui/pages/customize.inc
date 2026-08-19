@@ -21,6 +21,7 @@
                     }
                 }
                 Glass::StatRow("Address", BetterCastBridge::userHandle().c_str());
+                ImGui::TextDisabled("Advertised from the next start.");
                 Glass::EndPanel();
 
                 Glass::BeginPanel("LANGUAGE");

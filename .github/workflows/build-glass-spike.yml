@@ -57,7 +57,10 @@ jobs:
         shell: pwsh
         run: |
           pip install aqtinstall
+          # qtmultimedia for AudioPlayer's QAudioSink: without it the receive
+          # path plays no sound, which is how the spike shipped silent.
           python -m aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2019_64 `
+            --modules qtmultimedia `
             --outputdir C:/Qt
           echo "Qt6_DIR=C:/Qt/${{ env.QT_VERSION }}/msvc2019_64" >> $env:GITHUB_ENV
           echo "C:/Qt/${{ env.QT_VERSION }}/msvc2019_64/bin" >> $env:GITHUB_PATH
@@ -184,8 +187,61 @@ jobs:
             'Glass::DrawIcon(wdl, Glass::Icon::Spark,',
             'Glass::DrawIcon(wdl, Glass::Icon::Display,')
 
+          # 8. The welcome splash. liquidDX11 opens on its own spark and the
+          #    macOS-setup greeting - hello, Bonjour, Hola - which is charming
+          #    and belongs to someone else. The mark becomes the real BetterCast
+          #    logo, loaded as a texture from beside the exe with the display
+          #    glyph as a fallback, and the word becomes the app's own name.
+          #
+          #    Arrays joined with newlines rather than a here-string, for the
+          #    reason given below: a here-string terminator has to sit at column
+          #    0, and a column-0 line inside a YAML block scalar ends the block.
+          $splashOld = @(
+            '            Glass::DrawIcon(fdl, Glass::Icon::Spark, ImVec2(cw * 0.5f, ch * 0.5f - 120.0f * scale),',
+            '                            116.0f * scale, IM_COL32(255, 255, 255, (int)(235 * logoA)), 2.5f);'
+          ) -join $lf
+          $splashNew = @(
+            '            {',
+            '                static ID3D11ShaderResourceView* bcMark = nullptr;',
+            '                static bool bcMarkTried = false;',
+            '                if (!bcMarkTried) {',
+            '                    bcMarkTried = true;',
+            '                    std::string mp = AssetPath("bettercast-logo.png", nullptr);',
+            '                    int wn = MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, nullptr, 0);',
+            '                    if (wn > 1) {',
+            '                        std::wstring wp((size_t)wn - 1, 0);',
+            '                        MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, &wp[0], wn);',
+            '                        bcMark = LoadWICTexture(g_pd3dDevice, wp.c_str());',
+            '                    }',
+            '                }',
+            '                const float ms = 132.0f * scale;',
+            '                const ImVec2 mc(cw * 0.5f, ch * 0.5f - 120.0f * scale);',
+            '                if (bcMark) {',
+            '                    fdl->AddImage((ImTextureID)(size_t)bcMark,',
+            '                                  ImVec2(mc.x - ms * 0.5f, mc.y - ms * 0.5f),',
+            '                                  ImVec2(mc.x + ms * 0.5f, mc.y + ms * 0.5f),',
+            '                                  ImVec2(0, 0), ImVec2(1, 1),',
+            '                                  IM_COL32(255, 255, 255, (int)(255 * logoA)));',
+            '                } else {',
+            '                    Glass::DrawIcon(fdl, Glass::Icon::Display, mc, 116.0f * scale,',
+            '                                    IM_COL32(255, 255, 255, (int)(235 * logoA)), 2.5f);',
+            '                }',
+            '            }'
+          ) -join $lf
+          if (-not $t.Contains($splashOld)) { throw "splash mark patch did not apply" }
+          $t = $t.Replace($splashOld, $splashNew)
+
+          $before = $t
+          $t = $t.Replace(
+            'static const char* greet[] = { "hello", "Bonjour", "Hola" };',
+            'static const char* greet[] = { "BetterCast" };')
+          if ($t -eq $before) { throw "splash greeting patch did not apply" }
+          $before = $t
+          $t = $t.Replace('            const int N = 3;', '            const int N = 1;')
+          if ($t -eq $before) { throw "splash greeting count patch did not apply" }
+
           Set-Content $main $t -Encoding utf8
-          Write-Host "main.cpp patched: bridge, entry point, pump, icon, account, dock, mark"
+          Write-Host "main.cpp patched: bridge, entry point, pump, icon, account, dock, mark, splash"
 
       - name: Add the BetterCast core to the spike target
         shell: pwsh
@@ -219,7 +275,7 @@ jobs:
           $block = @(
             '',
             '# ---- BetterCast bridge (spike only) ----',
-            'find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network OpenGL OpenGLWidgets)',
+            'find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network OpenGL OpenGLWidgets Multimedia)',
             'set_target_properties(liquidDX11 PROPERTIES AUTOMOC ON)',
             'target_sources(liquidDX11 PRIVATE',
             "    `"$spike/BetterCastBridge.cpp`"",
@@ -235,6 +291,8 @@ jobs:
             "    `"$core/VideoRenderer.h`"",
             "    `"$core/AudioDecoder.cpp`"",
             "    `"$core/AudioDecoder.h`"",
+            "    `"$core/AudioPlayer.cpp`"",
+            "    `"$core/AudioPlayer.h`"",
             "    `"$core/Language.cpp`"",
             "    `"$core/Language.h`"",
             "    `"$core/UpdateChecker.cpp`"",
@@ -261,6 +319,7 @@ jobs:
             'target_link_directories(liquidDX11 PRIVATE ${FFMPEG_LIBRARY_DIRS})',
             'target_link_libraries(liquidDX11 PRIVATE',
             '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets',
+            '    Qt6::Multimedia',
             '    ${FFMPEG_LIBRARIES}',
             '    d3d11 dxgi setupapi user32 winmm ws2_32)'
           ) -join "`n"
@@ -318,6 +377,12 @@ jobs:
           $av = Get-ChildItem 'out/avcodec-*.dll' -ErrorAction SilentlyContinue
           if (-not $av) { throw "no avcodec DLL was bundled" }
 
+          # Audio on the receive side is a QAudioSink, so this DLL and its
+          # plugin directory have to travel too. Missing, the app starts fine
+          # and simply never makes a sound - the kind of failure nobody
+          # reports as a crash because it does not look like one.
+          if (-not (Test-Path 'out/Qt6Multimedia.dll')) { throw "Qt6Multimedia.dll was not deployed" }
+
           # App icon, generated the same way build-windows-receiver.yml does so
           # the taskbar shows the rounded BetterCast mark rather than a default.
           pip install --quiet Pillow
@@ -332,8 +397,25 @@ jobs:
           out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
           out.paste(src, (0, 0), mask)
           out.save('out/appicon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          # Same mark again for the welcome splash, but from the 2048px master
+          # rather than the 256px icon source: the splash draws it around 130
+          # logical pixels, which is several hundred real ones on a scaled
+          # display, and an upscaled icon looks it.
+          big = Image.open('bettercast/assets/branding/AppIcon.png').convert('RGBA')
+          ls = 512
+          big = big.resize((ls, ls), Image.LANCZOS)
+          lmask = Image.new('L', (ls * 4, ls * 4), 0)
+          ImageDraw.Draw(lmask).rounded_rectangle([0, 0, ls * 4 - 1, ls * 4 - 1], radius=int(ls * 4 * 0.22), fill=255)
+          lmask = lmask.resize((ls, ls), Image.LANCZOS)
+          logo = Image.new('RGBA', (ls, ls), (0, 0, 0, 0))
+          logo.paste(big, (0, 0), lmask)
+          logo.save('out/bettercast-logo.png')
           "
           if (-not (Test-Path 'out/appicon.ico')) { throw "appicon.ico was not generated" }
+          # The welcome splash draws this. Without it the splash falls back to a
+          # glyph, which is not wrong but is not the logo either - so fail here
+          # rather than ship a build that quietly lost its own mark.
+          if (-not (Test-Path 'out/bettercast-logo.png')) { throw "bettercast-logo.png was not generated" }
 
           # Both apps load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {

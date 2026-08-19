@@ -1,5 +1,7 @@
 #include "BetterCastBridge.h"
 
+#include "AudioDecoder.h"
+#include "AudioPlayer.h"
 #include "LogManager.h"
 #include "NetworkListener.h"
 #include "ServiceDiscovery.h"
@@ -42,6 +44,8 @@ std::unique_ptr<QOpenGLWidget>    g_probe;
 std::unique_ptr<NetworkListener>  g_network;
 std::unique_ptr<VideoDecoder>     g_decoder;
 std::unique_ptr<VideoRenderer>    g_renderer;   // parentless: its own window
+std::unique_ptr<AudioDecoder>     g_audioDecoder;
+std::unique_ptr<AudioPlayer>      g_audioPlayer;
 std::unique_ptr<UpdateChecker>    g_updates;
 std::string g_updateStatus;
 std::string g_updateUrl;
@@ -112,6 +116,35 @@ void refreshDevices() {
     }
 }
 
+// The display device name of the screen the user is looking at, e.g.
+// "\\.\DISPLAY1", for mirroring.
+//
+// Asked of Windows rather than inferred from the monitor list: the primary is
+// whichever adapter carries the PRIMARY_DEVICE flag, which is not reliably the
+// first one, and picking the wrong screen would mirror the wrong desktop.
+QString mainDisplayName() {
+#ifdef _WIN32
+    DISPLAY_DEVICEW dd = {};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
+        const bool attached = (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
+        const bool primary  = (dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) != 0;
+        if (attached && primary) return QString::fromWCharArray(dd.DeviceName);
+        dd.cb = sizeof(dd);
+    }
+#endif
+    return QString();
+}
+
+// Settings for one device, under a key of its own.
+QString deviceKey(const std::string& name) {
+    // A device name is free text - it can contain anything the owner typed,
+    // including the slashes QSettings reads as group separators. Percent
+    // encoding keeps one device's settings from landing inside another's.
+    return QString::fromUtf8(
+        QUrl::toPercentEncoding(QString::fromStdString(name)));
+}
+
 } // namespace
 
 void requestRedraw();   // defined below, used by init's connections
@@ -162,8 +195,17 @@ bool init(int argc, char** argv) {
     g_renderer->setWindowTitle("BetterCast - Receiving");
     g_renderer->resize(1280, 720);
 
+    // Sound as well as picture. The macOS sender encodes system audio as AAC
+    // and sends it down the same socket tagged 0x02; without a decoder wired
+    // in, NetworkListener drops those packets and the stream arrives silent.
+    // The Qt app has always done this - the bridge passed only the video half.
+    g_audioDecoder = std::make_unique<AudioDecoder>();
+    g_audioPlayer  = std::make_unique<AudioPlayer>();
+    QObject::connect(g_audioDecoder.get(), &AudioDecoder::pcmDecoded,
+                     g_audioPlayer.get(), &AudioPlayer::onPcmDecoded);
+
     g_network = std::make_unique<NetworkListener>();
-    g_network->setup(g_decoder.get(), g_renderer.get());
+    g_network->setup(g_decoder.get(), g_renderer.get(), g_audioDecoder.get());
     g_network->start();
 
     const uint16_t port = g_network->actualTcpPort();
@@ -294,9 +336,11 @@ void shutdown() {
         g_discovery->stopAdvertising();
         g_discovery.reset();
     }
-    g_network.reset();
+    g_network.reset();          // before the decoders it feeds
     g_renderer.reset();
     g_decoder.reset();
+    g_audioPlayer.reset();
+    g_audioDecoder.reset();
     g_app.reset();
 }
 
@@ -450,16 +494,57 @@ void* appIconHandle() {
 
 // ── Streaming ────────────────────────────────────────────────────────────
 
-bool startSending(const std::string& host, uint16_t port,
-                  int fps, int bitrateMbps, int width, int height) {
+bool startExtending(const std::string& host, uint16_t port,
+                    int fps, int bitrateMbps, int width, int height) {
 #ifdef ENABLE_SENDER
     if (!g_sender) return false;
+    // Empty display name: the controller claims a virtual display for this
+    // receiver, which is what extending means.
     const bool ok = g_sender->startSending(QString::fromStdString(host), port,
                                            fps, bitrateMbps, QString(), width, height);
     requestRedraw();
     return ok;
 #else
     (void)host; (void)port; (void)fps; (void)bitrateMbps; (void)width; (void)height;
+    return false;
+#endif
+}
+
+bool startMirroring(const std::string& host, uint16_t port,
+                    int fps, int bitrateMbps) {
+#ifdef ENABLE_SENDER
+    if (!g_sender) return false;
+    const QString screen = mainDisplayName();
+    if (screen.isEmpty()) {
+        LogManager::instance().log("Glass: could not work out which display is the main "
+                                   "one, so there is nothing to mirror");
+        return false;
+    }
+    // Naming a real monitor is how the controller is told to mirror: it
+    // captures that screen as it is, rather than claiming a virtual display
+    // and resizing it. Size is deliberately not passed - the screen is already
+    // whatever size it is, and changing that would resize the desktop.
+    const bool ok = g_sender->startSending(QString::fromStdString(host), port,
+                                           fps, bitrateMbps, screen, 0, 0);
+    requestRedraw();
+    return ok;
+#else
+    (void)host; (void)port; (void)fps; (void)bitrateMbps;
+    return false;
+#endif
+}
+
+bool isMirroring() {
+#ifdef ENABLE_SENDER
+    if (!g_sender) return false;
+    const QString screen = mainDisplayName();
+    if (screen.isEmpty()) return false;
+    for (const QString& host : g_sender->activeReceivers()) {
+        if (g_sender->displayForReceiver(host).compare(screen, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+    return false;
+#else
     return false;
 #endif
 }
@@ -504,6 +589,30 @@ std::string encoderInfo() {
 #else
     return {};
 #endif
+}
+
+// ── Per-device stream settings ───────────────────────────────────────────
+
+StreamSettings settingsFor(const std::string& deviceName) {
+    StreamSettings out;
+    if (deviceName.empty()) return out;
+    QSettings s("BetterCast", "BetterCast");
+    const QString k = "devices/" + deviceKey(deviceName) + "/";
+    out.fps         = s.value(k + "fps",     out.fps).toInt();
+    out.bitrateMbps = s.value(k + "bitrate", out.bitrateMbps).toInt();
+    out.width       = s.value(k + "width",   out.width).toInt();
+    out.height      = s.value(k + "height",  out.height).toInt();
+    return out;
+}
+
+void setSettingsFor(const std::string& deviceName, const StreamSettings& v) {
+    if (deviceName.empty()) return;
+    QSettings s("BetterCast", "BetterCast");
+    const QString k = "devices/" + deviceKey(deviceName) + "/";
+    s.setValue(k + "fps",     v.fps);
+    s.setValue(k + "bitrate", v.bitrateMbps);
+    s.setValue(k + "width",   v.width);
+    s.setValue(k + "height",  v.height);
 }
 
 } // namespace BetterCastBridge

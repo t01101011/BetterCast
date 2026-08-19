@@ -1,26 +1,71 @@
 // BetterCast: device page, driven by the real core. Replaces "General".
 //
 // Not a mockup. The device list is whatever BetterCast's own ServiceDiscovery
-// has found this second, and Send Screen Here drives the real
-// SenderController - DXGI duplication into a hardware encoder, onto a virtual
-// display claimed for that receiver. Nothing here reimplements any of it.
+// has found this second, and the two buttons drive the real SenderController -
+// DXGI duplication into a hardware encoder, onto a virtual display claimed for
+// that receiver or onto the screen in front of you. Nothing here reimplements
+// any of it.
+//
+// Send and Extend are the pair the macOS sender offers as "Mirror Built-in"
+// and "Extended Display", and they mean the same things here.
             if (dispPage == 0) {
                 const auto& bcDevices = BetterCastBridge::devices();
 
-                // All page state up front. ImGui statics are function-scoped and
-                // these are read across several panels, so declaring them where
-                // they are first drawn would leave the earlier ones unable to
-                // see them.
-                static int   bcSelected = 0;
-                static float bcFps      = 60.0f;
-                static float bcBitrate  = 20.0f;
-                static int   bcRes      = 0;
+                // All page state up front. ImGui statics are function-scoped
+                // and these are read across several panels, so declaring them
+                // where they are first drawn would leave the earlier ones
+                // unable to see them.
+                //
+                // Selection is held as a name rather than an index: the device
+                // list is rebuilt whenever discovery finds or loses something,
+                // and an index would then be pointing at whoever moved into
+                // that slot.
+                static std::string bcSelName;
+                static float bcFps     = 60.0f;
+                static float bcBitrate = 20.0f;
+                static int   bcRes     = 0;
                 static const char* bcResNames[] = {
                     "Match this PC", "1920 x 1080", "1440 x 900", "1280 x 800", "1280 x 720" };
                 static const int bcResW[] = { 0, 1920, 1440, 1280, 1280 };
                 static const int bcResH[] = { 0, 1080,  900,  800,  720 };
+                const int bcResCount = 5;
 
-                if (bcSelected >= (int)bcDevices.size()) bcSelected = 0;
+                int bcSelected = -1;
+                for (int i = 0; i < (int)bcDevices.size(); i++)
+                    if (bcDevices[(size_t)i].name == bcSelName) bcSelected = i;
+                if (bcSelected < 0 && !bcDevices.empty()) bcSelected = 0;
+
+                // Load this device's own settings whenever the selection moves,
+                // so switching between a phone and a laptop shows each one's
+                // size rather than whatever was last typed.
+                static std::string bcLoadedFor;
+                static bool bcLoadedAny = false;
+                if (bcSelected >= 0) {
+                    const std::string& selName = bcDevices[(size_t)bcSelected].name;
+                    bcSelName = selName;
+                    if (!bcLoadedAny || bcLoadedFor != selName) {
+                        bcLoadedAny = true;
+                        bcLoadedFor = selName;
+                        const auto cfg = BetterCastBridge::settingsFor(selName);
+                        bcFps     = (float)cfg.fps;
+                        bcBitrate = (float)cfg.bitrateMbps;
+                        bcRes = 0;
+                        for (int i = 0; i < bcResCount; i++)
+                            if (bcResW[i] == cfg.width && bcResH[i] == cfg.height) bcRes = i;
+                    }
+                }
+
+                // Writes back only on a change, so this is not a settings file
+                // rewritten sixty times a second.
+                auto bcSave = [&]() {
+                    if (bcSelected < 0) return;
+                    BetterCastBridge::StreamSettings cfg;
+                    cfg.fps         = (int)bcFps;
+                    cfg.bitrateMbps = (int)bcBitrate;
+                    cfg.width       = bcResW[bcRes];
+                    cfg.height      = bcResH[bcRes];
+                    BetterCastBridge::setSettingsFor(bcDevices[(size_t)bcSelected].name, cfg);
+                };
 
                 Glass::BeginPanel("DEVICES ON THIS NETWORK");
                 if (bcDevices.empty()) {
@@ -32,21 +77,20 @@
                         const bool live = BetterCastBridge::isSendingTo(bcDevices[(size_t)i].host);
                         std::string label = bcDevices[(size_t)i].name;
                         if (live) label += "  *";     // streaming right now
-                        if (Glass::Chip(label.c_str(), bcSelected == i)) bcSelected = i;
+                        if (Glass::Chip(label.c_str(), bcSelected == i))
+                            bcSelName = bcDevices[(size_t)i].name;
                     }
-                    const auto& sel = bcDevices[(size_t)bcSelected];
-                    Glass::Divider();
-                    Glass::StatRow("Address",
-                        (sel.host + ":" + std::to_string(sel.port)).c_str());
+                    if (bcSelected >= 0) {
+                        const auto& sel = bcDevices[(size_t)bcSelected];
+                        Glass::Divider();
+                        Glass::StatRow("Address",
+                            (sel.host + ":" + std::to_string(sel.port)).c_str());
+                    }
                 }
                 Glass::EndPanel();
 
-                Glass::BeginPanel("STREAM TO THIS DEVICE");
-                ImGui::TextWrapped("Gives this device a virtual display of its own, so your "
-                                   "desktop extends onto it rather than mirroring.");
-                ImGui::Dummy(ImVec2(0, 8));
-
-                if (bcDevices.empty()) {
+                Glass::BeginPanel("SCREEN FOR THIS DEVICE");
+                if (bcSelected < 0) {
                     ImGui::TextDisabled("No device selected.");
                 } else {
                     const auto& target = bcDevices[(size_t)bcSelected];
@@ -60,25 +104,57 @@
                             BetterCastBridge::stopSending(target.host);
                         }
                     } else {
-                        if (Glass::Button("Send Screen Here", true)) {
-                            BetterCastBridge::startSending(
+                        ImGui::TextWrapped("Send shows this device the screen in front of "
+                                           "you. Extend gives it a display of its own, so "
+                                           "your desktop grows onto it.");
+                        ImGui::Dummy(ImVec2(0, 8));
+
+                        // Windows can duplicate a display only once, so Send is
+                        // offered to one device at a time. Saying so up front
+                        // beats a button that fails when pressed.
+                        const bool mirrored = BetterCastBridge::isMirroring();
+                        if (!mirrored) {
+                            if (Glass::Button("Send Screen Here", false)) {
+                                BetterCastBridge::startMirroring(
+                                    target.host, target.port,
+                                    (int)bcFps, (int)bcBitrate);
+                            }
+                            ImGui::SameLine();
+                        }
+                        if (Glass::Button("Extend Screen Here", true)) {
+                            BetterCastBridge::startExtending(
                                 target.host, target.port,
                                 (int)bcFps, (int)bcBitrate,
                                 bcResW[bcRes], bcResH[bcRes]);
                         }
+                        if (mirrored) {
+                            ImGui::TextDisabled("Your screen is already going to another "
+                                                "device; Windows can only send it once.");
+                        }
                     }
-                    ImGui::SameLine();
+                    ImGui::Dummy(ImVec2(0, 4));
                     ImGui::TextDisabled("%d streaming", BetterCastBridge::sessionCount());
                 }
                 Glass::EndPanel();
 
                 Glass::BeginPanel("STREAM QUALITY FOR THIS DEVICE");
-                ImGui::SetNextItemWidth(220.0f*scale);
-                Glass::Slider("Frame rate", &bcFps, 15.0f, 120.0f, "%.0f FPS");
-                Glass::Dropdown("Resolution", bcResNames, 5, &bcRes);
-                ImGui::SetNextItemWidth(220.0f*scale);
-                Glass::Slider("Bitrate", &bcBitrate, 2.0f, 100.0f, "%.0f Mbps");
-                ImGui::TextDisabled("Applies to the next stream started to this device.");
+                if (bcSelected < 0) {
+                    ImGui::TextDisabled("No device selected.");
+                } else {
+                    ImGui::SetNextItemWidth(220.0f*scale);
+                    if (Glass::Slider("Frame rate", &bcFps, 15.0f, 120.0f, "%.0f FPS")) bcSave();
+                    if (Glass::Dropdown("Resolution", bcResNames, bcResCount, &bcRes)) bcSave();
+                    ImGui::SetNextItemWidth(220.0f*scale);
+                    if (Glass::Slider("Bitrate", &bcBitrate, 2.0f, 100.0f, "%.0f Mbps")) bcSave();
+                    // Through %s rather than as the format string: a device
+                    // name is whatever its owner typed, and a stray % in it
+                    // would be read as a conversion.
+                    const std::string note =
+                        "Kept for " + bcDevices[(size_t)bcSelected].name +
+                        " and used the next time a stream starts. Resolution applies to "
+                        "Extend; Send is whatever size your screen already is.";
+                    ImGui::TextWrapped("%s", note.c_str());
+                }
                 Glass::EndPanel();
 
                 // The architecture questions, answered on screen rather than argued.

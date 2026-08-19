@@ -82,11 +82,24 @@ const std::vector<Device>& devices();
 // duplication into a hardware H.264 encoder, one virtual display per
 // receiver. Nothing here reimplements any of it.
 
-// Begin streaming to a receiver. width/height of 0 means "match the primary".
+// Extend onto a receiver: it gets a virtual display of its own, so the desktop
+// grows rather than repeating. width/height of 0 means "match this PC".
+//
 // Returns false if no display could be claimed - see lastLogLine() for why,
 // since the reasons are worth reading rather than reducing to a bool.
-bool startSending(const std::string& host, uint16_t port,
-                  int fps, int bitrateMbps, int width, int height);
+bool startExtending(const std::string& host, uint16_t port,
+                    int fps, int bitrateMbps, int width, int height);
+
+// Mirror this PC's main screen onto a receiver, the way the macOS sender's
+// "Mirror Built-in" does. No virtual display is involved and nothing is
+// resized, so what the receiver shows is what is on the monitor.
+//
+// Windows can duplicate a display only once, so a second receiver cannot
+// mirror the same screen at the same time; that returns false with the reason
+// in lastLogLine(). There is no size argument for the same reason - the screen
+// is whatever size it already is.
+bool startMirroring(const std::string& host, uint16_t port,
+                    int fps, int bitrateMbps);
 
 void stopSending(const std::string& host);
 bool isSendingTo(const std::string& host);
@@ -99,6 +112,30 @@ std::string displayForReceiver(const std::string& host);
 // Encoder actually in use, e.g. "h264_nvenc". Empty until the first stream
 // starts, because the encoder is probed at that point rather than up front.
 std::string encoderInfo();
+
+// Whether this PC's main screen is already going to some receiver, so the UI
+// can say why mirroring to a second one is not on offer.
+bool isMirroring();
+
+// ── Per-device stream settings ───────────────────────────────────────────
+//
+// Remembered per device rather than globally, matching the macOS sender where
+// clicking a connected display gives you that display's resolution and
+// bitrate. A phone wants a different size from a laptop, and having set it
+// once you should not have to set it again.
+//
+// Keyed by device name, not address: a phone that comes back tomorrow on a
+// different IP is still the same phone and should keep its settings.
+
+struct StreamSettings {
+    int fps         = 60;
+    int bitrateMbps = 20;
+    int width       = 0;   // 0 = match this PC
+    int height      = 0;
+};
+
+StreamSettings settingsFor(const std::string& deviceName);
+void setSettingsFor(const std::string& deviceName, const StreamSettings& s);
 
 // Proves an OpenGL widget and a D3D11 swapchain survive in one process, which
 // is the one coexistence question the architecture rests on. Returns false if

@@ -60,6 +60,17 @@ QString SenderController::displayForReceiver(const QString& receiverHost) const 
     return s ? s->displayName : QString();
 }
 
+bool SenderController::isVirtualDisplay(const QString& displayName) const {
+    if (displayName.isEmpty() || !m_vdd) return false;
+    for (const auto& mon : m_vdd->enumerateMonitors()) {
+        if (mon.name.compare(displayName, Qt::CaseInsensitive) == 0) return mon.isVirtual;
+    }
+    // Unknown to the driver, so it is not one of ours. Treating it as physical
+    // is the safe reading: the cost of guessing wrong that way is refusing to
+    // resize something, not resizing a monitor someone is working on.
+    return false;
+}
+
 bool SenderController::displayInUse(const QString& displayName) const {
     if (displayName.isEmpty()) return false;
     for (auto* s : m_sessions) {
@@ -231,7 +242,24 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
         s->adapterIndex = m_adapterIndex;
         s->outputIndex = m_outputIndex;
     }
-    if (s->displayName.isEmpty() || displayInUse(s->displayName)) {
+
+    // Naming a monitor the user is looking at is a mirror request, matching the
+    // macOS sender's "Mirror Built-in". Two things below would quietly turn
+    // that back into an extend: claiming a spare virtual display when this one
+    // looks busy, and raising the resolution of whatever was chosen. Neither
+    // may happen to a real monitor — the second would change the resolution of
+    // a screen someone is working on.
+    const bool mirroring = !s->displayName.isEmpty() && !isVirtualDisplay(s->displayName);
+    if (mirroring && displayInUse(s->displayName)) {
+        emit error(QString("%1 is already being mirrored to another receiver. Windows can "
+                           "only duplicate a display once, so mirror to one device at a "
+                           "time — or extend, which gives each receiver its own screen.")
+                       .arg(s->displayName));
+        delete s;
+        return false;
+    }
+
+    if (!mirroring && (s->displayName.isEmpty() || displayInUse(s->displayName))) {
         const QString claimed = claimDisplayFor(receiverHost);
         if (claimed.isEmpty()) {
             emit error(m_sessions.isEmpty()
@@ -265,7 +293,7 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
 
     // Windows brings an extended virtual display up at the driver's 800x600
     // default. Raise it before capture starts, or the stream goes out at 800x600.
-    if (m_vdd) {
+    if (m_vdd && !mirroring) {
         // Per-device size when one was chosen, otherwise match the primary.
         const QSize target = (s->width > 0 && s->height > 0)
             ? QSize(s->width, s->height)

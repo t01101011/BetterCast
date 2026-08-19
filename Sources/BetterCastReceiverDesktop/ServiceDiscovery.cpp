@@ -4,6 +4,7 @@
 #include <QNetworkInterface>
 #include <QHostInfo>
 #include <QtEndian>
+#include <QSettings>
 #include <QVariant>
 
 // Log to both qDebug and the app's visible log viewer
@@ -94,7 +95,24 @@ void ServiceDiscovery::startAdvertising(uint16_t tcpPort) {
 #else
     const QString platform = "Linux";
 #endif
-    if (hostName.isEmpty() || hostName == "localhost") {
+    // A name the user chose wins over the machine's own, so their phone shows
+    // "Studio PC" instead of DESKTOP-4F9K2A1. Until this existed the name in
+    // Settings was decoration - it was stored, shown back, and never used.
+    //
+    // Two things it must not break. The platform word stays on the end, because
+    // the macOS sender reads it to tell an Apple receiver from a non-Apple one
+    // and a rename that dropped it would make this machine invisible to that
+    // check. And a dot would split the mDNS instance label in two, so it goes.
+    QSettings settings("BetterCast", "BetterCast");
+    QString chosen = settings.value("identity/name").toString().trimmed();
+    chosen.replace(QChar('.'), QChar('-'));
+    chosen = chosen.left(40);
+
+    if (!chosen.isEmpty()) {
+        m_serviceName = chosen.contains(platform, Qt::CaseInsensitive)
+                            ? chosen
+                            : chosen + " (" + platform + ")";
+    } else if (hostName.isEmpty() || hostName == "localhost") {
         m_serviceName = platform + " PC";
     } else {
         m_serviceName = hostName + " (" + platform + ")";
