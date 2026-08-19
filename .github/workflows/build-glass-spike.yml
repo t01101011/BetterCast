@@ -197,6 +197,17 @@ jobs:
           $spike = "$ws/bettercast/spike/glass-app"
           $core  = "$ws/bettercast/Sources/BetterCastReceiverDesktop"
 
+          # UpdateChecker resolves the running version from this define, and
+          # compares it against the latest GitHub release. Hardcoding it here
+          # would let the spike drift from the installer and claim an update
+          # that is already installed. Split rather than regex: a pattern for
+          # this needs backslashes, which have not survived this repo's tooling.
+          $verLine = Get-Content "$core/CMakeLists.txt" |
+                     Where-Object { $_ -like 'project(BetterCastReceiver VERSION*' }
+          if (-not $verLine) { throw "could not read the version out of CMakeLists.txt" }
+          $bcVersion = ($verLine -split ' ')[2].TrimEnd(')')
+          Write-Host "spike version: $bcVersion"
+
           # An array joined with newlines, not a here-string: a PowerShell
           # here-string terminator has to sit at column 0, and inside a YAML
           # block scalar a column-0 line ends the block and breaks the file.
@@ -224,6 +235,10 @@ jobs:
             "    `"$core/VideoRenderer.h`"",
             "    `"$core/AudioDecoder.cpp`"",
             "    `"$core/AudioDecoder.h`"",
+            "    `"$core/Language.cpp`"",
+            "    `"$core/Language.h`"",
+            "    `"$core/UpdateChecker.cpp`"",
+            "    `"$core/UpdateChecker.h`"",
             "    `"$core/sender/SenderController.cpp`"",
             "    `"$core/sender/SenderController.h`"",
             "    `"$core/sender/VideoEncoderFF.cpp`"",
@@ -239,7 +254,8 @@ jobs:
             "    `"$core/sender/VideoEncoderFF.h`"",
             ')',
             "target_include_directories(liquidDX11 PRIVATE `"$spike`" `"$core`")",
-            'target_compile_definitions(liquidDX11 PRIVATE ENABLE_SENDER=1)',
+            'target_compile_definitions(liquidDX11 PRIVATE ENABLE_SENDER=1',
+            "    BETTERCAST_VERSION=`"$bcVersion`")",
             'find_package(FFMPEG REQUIRED)',
             'target_include_directories(liquidDX11 PRIVATE ${FFMPEG_INCLUDE_DIRS})',
             'target_link_directories(liquidDX11 PRIVATE ${FFMPEG_LIBRARY_DIRS})',
