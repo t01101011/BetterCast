@@ -109,12 +109,16 @@ jobs:
             "int main(int bc_argc, char** bc_argv)`n{`n    BetterCastBridge::init(bc_argc, bc_argv);")
           if ($t -eq $before) { throw "entry point patch did not apply" }
 
-          # 3. Pump Qt once per frame. Without this nothing Qt-driven ever runs:
-          #    no discovery, no sockets, no timers.
+          # 3. Pump Qt once per frame, then skip the frame entirely when
+          #    nothing has changed. Without the pump nothing Qt-driven ever
+          #    runs; without the skip this redraws at 60fps forever, which is
+          #    right for a showcase and wrong for an app that sits open all
+          #    day. shouldRender sleeps before returning false, so `continue`
+          #    does not spin.
           $before = $t
           $t = $t.Replace(
             '        if (done) break;',
-            "        if (done) break;`n        BetterCastBridge::pump();")
+            "        if (done) break;`n        BetterCastBridge::pump();`n        if (!BetterCastBridge::shouldRender()) continue;")
           if ($t -eq $before) { throw "event pump patch did not apply" }
 
           Set-Content $main $t -Encoding utf8

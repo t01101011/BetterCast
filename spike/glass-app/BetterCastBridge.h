@@ -50,8 +50,25 @@ bool init(int argc, char** argv);
 // window has nobody looking at it, so it does not need 60fps.
 void pump();
 
+// Whether this frame is worth drawing at all.
+//
+// The real saving is not a lower frame rate, it is not rendering. A utility
+// that sits open all day changes nothing on screen for minutes at a time, and
+// every frame it draws in that state is a GPU cycle spent on an identical
+// image - the swapchain still shows the last frame presented, so skipping
+// costs nothing visually.
+//
+// Sleeps before returning false, so the caller can `continue` without spinning
+// the loop. Returns true whenever the user is interacting, the window has just
+// come forward, or the core reports something new.
+bool shouldRender();
+
 // Frames per second the throttle is currently allowing, for the UI to show.
 int currentFrameCap();
+
+// Forces the next frame to draw. Call when something changes that the render
+// loop cannot see for itself - a device appearing, a stream starting.
+void requestRedraw();
 
 void shutdown();
 
