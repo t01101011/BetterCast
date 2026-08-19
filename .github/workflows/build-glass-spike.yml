@@ -76,6 +76,14 @@ jobs:
           $main = 'liquid-bc/examples/example_win32_directx11/src/main.cpp'
           $t = Get-Content $main -Raw
 
+          # Normalise to LF before matching. actions/checkout hands this file
+          # over with CRLF on Windows, so any pattern spanning a line break
+          # silently fails to match - which is exactly what broke the entry
+          # point patch. [char]13/[char]10 rather than escapes, since backslash
+          # sequences have not survived this repo's tooling reliably.
+          $lf = [string][char]10
+          $t = $t.Replace([string][char]13 + $lf, $lf)
+
           # Nav labels, or the sidebar still reads General / Display / Battery.
           $t = $t.Replace(
             'const char* navLabels[] = { "General", "Display", "Battery", "Storage", "Customize" };',
