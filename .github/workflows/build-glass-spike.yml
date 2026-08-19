@@ -109,10 +109,10 @@ jobs:
           # Nav labels, or the sidebar still reads General / Display / Battery.
           $t = $t.Replace(
             'const char* navLabels[] = { "General", "Display", "Battery", "Storage", "Customize" };',
-            'const char* navLabels[] = { "Devices", "Hotspot", "Send", "Receive", "Material" };')
+            'const char* navLabels[] = { "Devices", "Hotspot", "Send", "Receive", "Settings" };')
           $t = $t.Replace(
             'const char* pages[8] = { "General","Display","Battery","Storage","Customize","View Profile","Account Settings","Apps" };',
-            'const char* pages[8] = { "Devices","Hotspot","Send","Receive","Material","View Profile","Account Settings","Apps" };')
+            'const char* pages[8] = { "Devices","Hotspot","Send","Receive","Settings","View Profile","Account Settings","Apps" };')
           if ($t -notmatch 'Devices') { throw "nav label patch did not apply" }
 
           # Branding. "Glass" appears as the sidebar wordmark, the sign-in
@@ -152,8 +152,40 @@ jobs:
             "        if (done) break;`n        BetterCastBridge::pump();`n        if (!BetterCastBridge::shouldRender()) continue;")
           if ($t -eq $before) { throw "event pump patch did not apply" }
 
+          # 4. Taskbar and title-bar icon. The class registers with a null
+          #    hIcon upstream, so Windows shows the generic default.
+          $before = $t
+          $t = $t.Replace(
+            'GetModuleHandle(nullptr), nullptr, nullptr, nullptr, nullptr, L"GlassOverlay", nullptr };',
+            'GetModuleHandle(nullptr), (HICON)BetterCastBridge::appIconHandle(), nullptr, nullptr, nullptr, L"GlassOverlay", (HICON)BetterCastBridge::appIconHandle() };')
+          if ($t -eq $before) { throw "window icon patch did not apply" }
+
+          # 5. The account chip is a hardcoded demo login upstream. BetterCast
+          #    has no accounts; the chip becomes the name this machine
+          #    advertises under, with its address beneath.
+          $before = $t
+          $t = $t.Replace(
+            '"acct", "poncipp", "@pondot", "PO",',
+            '"acct", BetterCastBridge::userName().c_str(), BetterCastBridge::userHandle().c_str(), BetterCastBridge::userInitials().c_str(),')
+          if ($t -eq $before) { throw "account chip patch did not apply" }
+
+          # 6. Hide the demo-surface dock - media, web, card and the rest are
+          #    liquidDX11's sample gallery, not BetterCast features. Hidden
+          #    rather than deleted, so it can come back if it earns a place.
+          $before = $t
+          $t = $t.Replace(
+            'int d = Glass::SurfaceDock(dockCx, o.y + innerH - 6.0f, innerW - sideW - 20.0f,',
+            'int d = -1; if (false) d = Glass::SurfaceDock(dockCx, o.y + innerH - 6.0f, innerW - sideW - 20.0f,')
+          if ($t -eq $before) { throw "surface dock patch did not apply" }
+
+          # 7. Sidebar mark. The real logo needs a texture upload; a display
+          #    glyph at least stops it being someone else's spark.
+          $t = $t.Replace(
+            'Glass::DrawIcon(wdl, Glass::Icon::Spark,',
+            'Glass::DrawIcon(wdl, Glass::Icon::Display,')
+
           Set-Content $main $t -Encoding utf8
-          Write-Host "main.cpp patched: bridge include, entry point, event pump"
+          Write-Host "main.cpp patched: bridge, entry point, pump, icon, account, dock, mark"
 
       - name: Add the BetterCast core to the spike target
         shell: pwsh
@@ -269,6 +301,23 @@ jobs:
           }
           $av = Get-ChildItem 'out/avcodec-*.dll' -ErrorAction SilentlyContinue
           if (-not $av) { throw "no avcodec DLL was bundled" }
+
+          # App icon, generated the same way build-windows-receiver.yml does so
+          # the taskbar shows the rounded BetterCast mark rather than a default.
+          pip install --quiet Pillow
+          python -c "
+          from PIL import Image, ImageDraw
+          src = Image.open('bettercast/Sources/BetterCastReceiverDesktop/icon_256x256.png').convert('RGBA')
+          size = max(src.size)
+          src = src.resize((size, size), Image.LANCZOS)
+          mask = Image.new('L', (size * 4, size * 4), 0)
+          ImageDraw.Draw(mask).rounded_rectangle([0, 0, size * 4 - 1, size * 4 - 1], radius=int(size * 4 * 0.22), fill=255)
+          mask = mask.resize((size, size), Image.LANCZOS)
+          out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+          out.paste(src, (0, 0), mask)
+          out.save('out/appicon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+          "
+          if (-not (Test-Path 'out/appicon.ico')) { throw "appicon.ico was not generated" }
 
           # Both apps load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {

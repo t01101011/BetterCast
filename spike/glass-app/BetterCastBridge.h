@@ -24,6 +24,7 @@
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace BetterCastBridge {
@@ -108,5 +109,37 @@ bool probeWindowOpen();
 // Last line the core logged, so the glass UI can show that real machinery is
 // running behind it rather than mock data.
 std::string lastLogLine();
+
+// ── Identity ─────────────────────────────────────────────────────────────
+//
+// liquidDX11 ships a hardcoded demo account. BetterCast has no accounts and
+// never will, but the chip is a good place for the name this machine
+// advertises itself under, which is a real setting rather than decoration.
+
+std::string userName();      // what this machine calls itself
+std::string userHandle();    // shown under the name: the local address
+std::string userInitials();  // for the avatar
+void setUserName(const std::string& name);
+
+// ── Settings ─────────────────────────────────────────────────────────────
+
+std::string appVersion();          // e.g. "17.0.0"
+std::string logFilePath();
+
+// Language codes and their names in their own language, for the picker.
+std::vector<std::pair<std::string, std::string>> languages();
+std::string savedLanguage();                       // empty means follow system
+void setSavedLanguage(const std::string& code);
+
+// Kicks off a GitHub Releases check; the result arrives in updateStatus().
+void checkForUpdates();
+std::string updateStatus();
+std::string updateUrl();
+void openUrl(const std::string& url);
+
+// Window icon for the app, so the taskbar shows BetterCast rather than the
+// generic default. Returns an HICON as void* to keep Windows types out of
+// this header. Null when the icon file is not beside the executable.
+void* appIconHandle();
 
 } // namespace BetterCastBridge

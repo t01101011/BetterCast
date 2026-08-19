@@ -5,11 +5,21 @@
 #include "ServiceDiscovery.h"
 #include "VideoDecoder.h"
 #include "VideoRenderer.h"
+#include "Language.h"
+#include "UpdateChecker.h"
 #ifdef ENABLE_SENDER
 #include "sender/SenderController.h"
 #endif
 
 #include <QApplication>
+#include <QDesktopServices>
+#include <QFileInfo>
+#include <QHostAddress>
+#include <QNetworkInterface>
+#include <QSettings>
+#include <QSurfaceFormat>
+#include <QSysInfo>
+#include <QUrl>
 #include <QCoreApplication>
 #include <QOpenGLWidget>
 #include <QTimer>
@@ -32,6 +42,9 @@ std::unique_ptr<QOpenGLWidget>    g_probe;
 std::unique_ptr<NetworkListener>  g_network;
 std::unique_ptr<VideoDecoder>     g_decoder;
 std::unique_ptr<VideoRenderer>    g_renderer;   // parentless: its own window
+std::unique_ptr<UpdateChecker>    g_updates;
+std::string g_updateStatus;
+std::string g_updateUrl;
 #ifdef ENABLE_SENDER
 std::unique_ptr<SenderController> g_sender;
 #endif
@@ -82,6 +95,19 @@ bool init(int argc, char** argv) {
 
     g_argc = argc;
     g_argv = argv;
+
+    // Before QApplication, and the reason received video came through black.
+    //
+    // VideoRenderer uploads NV12 through fixed-function paths that a Core
+    // profile context does not have; main.cpp of the Qt app sets this for
+    // exactly that reason and says so. Without it the renderer gets whatever
+    // Qt defaults to, the texture upload quietly fails and every frame paints
+    // black - decoded fine, displayed as nothing.
+    QSurfaceFormat fmt;
+    fmt.setVersion(2, 1);
+    fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
+    fmt.setSwapInterval(1);
+    QSurfaceFormat::setDefaultFormat(fmt);
 
     // QApplication rather than QCoreApplication, so widgets remain available
     // and the existing receive window keeps working untouched.
@@ -278,6 +304,121 @@ bool probeWindowOpen() {
 
 std::string lastLogLine() {
     return g_lastLog;
+}
+
+// -- Identity -------------------------------------------------------------
+
+std::string userName() {
+    QSettings s("BetterCast", "BetterCast");
+    // Falls back to the machine name, which is what mDNS advertises anyway, so
+    // an untouched install shows something true rather than a placeholder.
+    const QString fallback = QString("%1 (Windows)").arg(QSysInfo::machineHostName());
+    return s.value("identity/name", fallback).toString().toStdString();
+}
+
+void setUserName(const std::string& name) {
+    QSettings s("BetterCast", "BetterCast");
+    s.setValue("identity/name", QString::fromStdString(name));
+    requestRedraw();
+}
+
+std::string userHandle() {
+    // The address other devices reach this machine on is more use under the
+    // name than an invented handle.
+    for (const QHostAddress& a : QNetworkInterface::allAddresses()) {
+        if (a.protocol() == QAbstractSocket::IPv4Protocol && !a.isLoopback()) {
+            return a.toString().toStdString();
+        }
+    }
+    return "no network";
+}
+
+std::string userInitials() {
+    const QString n = QString::fromStdString(userName()).trimmed();
+    QString out;
+    const QStringList parts = n.split(QChar(' '), Qt::SkipEmptyParts);
+    for (const QString& part : parts) {
+        if (!part.isEmpty() && part.at(0).isLetterOrNumber()) out += part.at(0).toUpper();
+        if (out.size() == 2) break;
+    }
+    return out.isEmpty() ? std::string("BC") : out.toStdString();
+}
+
+// -- Settings -------------------------------------------------------------
+
+std::string appVersion() {
+    return UpdateChecker::currentVersion().toStdString();
+}
+
+std::string logFilePath() {
+    return LogManager::instance().logFilePath().toStdString();
+}
+
+std::vector<std::pair<std::string, std::string>> languages() {
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const auto& e : Language::available()) {
+        out.emplace_back(e.code.toStdString(), e.endonym.toStdString());
+    }
+    return out;
+}
+
+std::string savedLanguage() {
+    return Language::savedCode().toStdString();
+}
+
+void setSavedLanguage(const std::string& code) {
+    Language::setSavedCode(QString::fromStdString(code));
+    LogManager::instance().log("Settings: language applies on next launch");
+}
+
+void checkForUpdates() {
+    if (!g_updates) {
+        g_updates = std::make_unique<UpdateChecker>();
+        QObject::connect(g_updates.get(), &UpdateChecker::finished,
+                         [](bool available, const QString& tag, const QString& url, const QString&) {
+            g_updateUrl = url.toStdString();
+            g_updateStatus = available
+                ? QString("Update available: %1").arg(tag).toStdString()
+                : QString("Up to date (%1)").arg(UpdateChecker::currentTag()).toStdString();
+            requestRedraw();
+        });
+        QObject::connect(g_updates.get(), &UpdateChecker::failed, [](const QString& why) {
+            // Quietly: BetterCast is often used on an isolated hotspot with no
+            // internet, where a failed check is expected rather than wrong.
+            g_updateStatus = QString("Could not check: %1").arg(why).toStdString();
+            requestRedraw();
+        });
+    }
+    g_updateStatus = "Checking...";
+    g_updates->check();
+}
+
+std::string updateStatus() { return g_updateStatus; }
+std::string updateUrl()    { return g_updateUrl; }
+
+void openUrl(const std::string& url) {
+    QDesktopServices::openUrl(QUrl(QString::fromStdString(url)));
+}
+
+void* appIconHandle() {
+#ifdef _WIN32
+    static HICON icon = nullptr;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        // Beside the executable, as the workflow ships it. LR_LOADFROMFILE
+        // avoids needing a resource script in a project whose build is patched
+        // together rather than owned.
+        const QString path =
+            QFileInfo(QCoreApplication::applicationDirPath() + "/appicon.ico").absoluteFilePath();
+        icon = (HICON)LoadImageW(nullptr, path.toStdWString().c_str(), IMAGE_ICON,
+                                 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+        if (!icon) LogManager::instance().log("Glass: appicon.ico not found beside the exe");
+    }
+    return icon;
+#else
+    return nullptr;
+#endif
 }
 
 // ── Streaming ────────────────────────────────────────────────────────────
