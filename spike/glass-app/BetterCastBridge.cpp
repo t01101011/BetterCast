@@ -1,7 +1,10 @@
 #include "BetterCastBridge.h"
 
 #include "LogManager.h"
+#include "NetworkListener.h"
 #include "ServiceDiscovery.h"
+#include "VideoDecoder.h"
+#include "VideoRenderer.h"
 #ifdef ENABLE_SENDER
 #include "sender/SenderController.h"
 #endif
@@ -26,6 +29,9 @@ namespace {
 std::unique_ptr<QApplication>     g_app;
 std::unique_ptr<ServiceDiscovery> g_discovery;
 std::unique_ptr<QOpenGLWidget>    g_probe;
+std::unique_ptr<NetworkListener>  g_network;
+std::unique_ptr<VideoDecoder>     g_decoder;
+std::unique_ptr<VideoRenderer>    g_renderer;   // parentless: its own window
 #ifdef ENABLE_SENDER
 std::unique_ptr<SenderController> g_sender;
 #endif
@@ -69,6 +75,7 @@ void refreshDevices() {
 } // namespace
 
 void requestRedraw();   // defined below, used by init's connections
+int  sessionCount();    // defined below, used by the render throttle
 
 bool init(int argc, char** argv) {
     if (g_app) return true;
@@ -93,7 +100,34 @@ bool init(int argc, char** argv) {
                      [](const DiscoveredService&) { refreshDevices(); requestRedraw(); });
     QObject::connect(g_discovery.get(), &ServiceDiscovery::serviceLost,
                      [](const QString&) { refreshDevices(); requestRedraw(); });
+    // Receive side. Without this Windows browses but never announces itself,
+    // so it stops appearing on other devices as a screen they can extend to -
+    // which is what the shipping app does at startup and the first version of
+    // this bridge quietly dropped.
+    g_decoder  = std::make_unique<VideoDecoder>();
+    g_renderer = std::make_unique<VideoRenderer>();
+    g_renderer->setWindowTitle("BetterCast - Receiving");
+    g_renderer->resize(1280, 720);
+
+    g_network = std::make_unique<NetworkListener>();
+    g_network->setup(g_decoder.get(), g_renderer.get());
+    g_network->start();
+
+    const uint16_t port = g_network->actualTcpPort();
+    g_discovery->startAdvertising(port);
     g_discovery->startBrowsing();
+
+    // Show the video window only while something is actually sending, the way
+    // the Qt app opens and closes it on connect.
+    QObject::connect(g_network.get(), &NetworkListener::connectionEstablished,
+                     []() { if (g_renderer) g_renderer->show(); requestRedraw(); });
+    QObject::connect(g_network.get(), &NetworkListener::connectionLost,
+                     []() { if (g_renderer) g_renderer->hide(); requestRedraw(); });
+    QObject::connect(g_network.get(), &NetworkListener::statusChanged,
+                     [](const QString& m) { LogManager::instance().log(m); });
+
+    LogManager::instance().log(
+        QString("Glass: listening on port %1 and advertising to the network").arg(port));
 
 #ifdef ENABLE_SENDER
     g_sender = std::make_unique<SenderController>();
@@ -115,9 +149,19 @@ bool init(int argc, char** argv) {
 void pump() {
     if (!g_app) return;
 
-    // Bounded rather than open-ended: an unbounded processEvents can service
-    // work faster than it arrives and stall the frame it was called from.
-    QCoreApplication::processEvents(QEventLoop::AllEvents, 4 /* ms */);
+    // Drain the queue, do not ration it.
+    //
+    // This used to cap at 4ms, on the theory that an unbounded processEvents
+    // could stall the frame. That was wrong twice over: processEvents returns
+    // as soon as the queue is empty, so there is nothing to run away with, and
+    // the cap was actively harmful. Captured frames reach the encoder and the
+    // socket through queued signals delivered on this thread, so 4ms out of
+    // every 16 gave the whole streaming pipeline a 25% duty cycle. Three
+    // receivers at 60fps is 180 frames a second through that gate, and the
+    // backlog showed up as cursor lag that grew the longer a stream ran while
+    // the picture itself stayed clean - a queue draining slower than it fills,
+    // not a dropped-frame problem.
+    QCoreApplication::processEvents(QEventLoop::AllEvents);
 }
 
 void requestRedraw() {
@@ -164,9 +208,16 @@ bool shouldRender() {
         return true;
     }
 
-    // Sleep so the caller can skip without spinning. Short enough that input
-    // still feels immediate: the next poll is at most 16ms away.
-    Sleep(16);
+    // Sleep so the caller can skip without spinning.
+    //
+    // Much shorter while streaming: the sleep sets how often pump() runs, and
+    // pump() is what moves captured frames to the encoder and the socket. At
+    // 16ms an idle-looking window still throttles a live stream to 60 drains a
+    // second; at 4ms it drains 250 times, which is comfortably ahead of three
+    // receivers at 60fps. Idle with nothing streaming keeps the long sleep,
+    // since that is where the GPU saving comes from.
+    const bool streaming = sessionCount() > 0;
+    Sleep(streaming ? 4 : 16);
     return false;
 #else
     return true;
@@ -187,8 +238,12 @@ void shutdown() {
 #endif
     if (g_discovery) {
         g_discovery->stopBrowsing();
+        g_discovery->stopAdvertising();
         g_discovery.reset();
     }
+    g_network.reset();
+    g_renderer.reset();
+    g_decoder.reset();
     g_app.reset();
 }
 

@@ -115,6 +115,15 @@ jobs:
             'const char* pages[8] = { "Devices","Hotspot","Send","Receive","Material","View Profile","Account Settings","Apps" };')
           if ($t -notmatch 'Devices') { throw "nav label patch did not apply" }
 
+          # Branding. "Glass" appears as the sidebar wordmark, the sign-in
+          # heading, the dynamic island title and the app name on every
+          # notification. Replacing the quoted string catches all of them and
+          # leaves the Glass:: namespace alone.
+          $before = $t
+          $t = $t.Replace('"Glass"', '"BetterCast"')
+          $t = $t.Replace('L"Glass Overlay"', 'L"BetterCast"')
+          if ($t -eq $before) { throw "branding patch did not apply" }
+
           # 1. The bridge header.
           $before = $t
           $t = $t.Replace(
@@ -167,7 +176,7 @@ jobs:
           $block = @(
             '',
             '# ---- BetterCast bridge (spike only) ----',
-            'find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network OpenGLWidgets)',
+            'find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network OpenGL OpenGLWidgets)',
             'set_target_properties(liquidDX11 PROPERTIES AUTOMOC ON)',
             'target_sources(liquidDX11 PRIVATE',
             "    `"$spike/BetterCastBridge.cpp`"",
@@ -175,6 +184,12 @@ jobs:
             "    `"$core/ServiceDiscovery.cpp`"",
             "    `"$core/ServiceDiscovery.h`"",
             "    `"$core/LogManager.h`"",
+            "    `"$core/NetworkListener.cpp`"",
+            "    `"$core/NetworkListener.h`"",
+            "    `"$core/VideoDecoder.cpp`"",
+            "    `"$core/VideoDecoder.h`"",
+            "    `"$core/VideoRenderer.cpp`"",
+            "    `"$core/VideoRenderer.h`"",
             "    `"$core/sender/SenderController.cpp`"",
             "    `"$core/sender/SenderController.h`"",
             "    `"$core/sender/VideoEncoderFF.cpp`"",
@@ -195,7 +210,7 @@ jobs:
             'target_include_directories(liquidDX11 PRIVATE ${FFMPEG_INCLUDE_DIRS})',
             'target_link_directories(liquidDX11 PRIVATE ${FFMPEG_LIBRARY_DIRS})',
             'target_link_libraries(liquidDX11 PRIVATE',
-            '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGLWidgets',
+            '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets',
             '    ${FFMPEG_LIBRARIES}',
             '    d3d11 dxgi setupapi user32 winmm ws2_32)'
           ) -join "`n"
