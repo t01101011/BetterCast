@@ -1306,21 +1306,21 @@ void MainWindow::setupSettingsPage() {
     layout->addWidget(pageTitle);
 
     // Appearance
-    auto* themeCard = makeCard("Appearance");
+    auto* themeCard = makeCard(tr("Appearance"));
     auto* themeLayout = new QVBoxLayout(themeCard);
     themeLayout->setSpacing(10);
 
     auto* themeRow = new QHBoxLayout();
-    auto* themeLabel = new QLabel("Theme:");
+    auto* themeLabel = new QLabel(tr("Theme:"));
     themeLabel->setStyleSheet("font-size: 13px;");
     themeRow->addWidget(themeLabel);
 
     m_themeCombo = new QComboBox();
-    m_themeCombo->addItem("Follow system", static_cast<int>(Theme::Mode::System));
-    m_themeCombo->addItem("Light", static_cast<int>(Theme::Mode::Light));
-    m_themeCombo->addItem("Dark", static_cast<int>(Theme::Mode::Dark));
+    m_themeCombo->addItem(tr("Follow system"), static_cast<int>(Theme::Mode::System));
+    m_themeCombo->addItem(tr("Light"), static_cast<int>(Theme::Mode::Light));
+    m_themeCombo->addItem(tr("Dark"), static_cast<int>(Theme::Mode::Dark));
 #ifdef _WIN32
-    m_themeCombo->addItem("Glass", static_cast<int>(Theme::Mode::Glass));
+    m_themeCombo->addItem(tr("Glass"), static_cast<int>(Theme::Mode::Glass));
 #endif
     m_themeCombo->setCurrentIndex(static_cast<int>(Theme::savedMode()));
     themeRow->addWidget(m_themeCombo);
@@ -1376,7 +1376,7 @@ void MainWindow::setupSettingsPage() {
     layout->addWidget(themeCard);
 
     // About card
-    auto* aboutCard = makeCard("About");
+    auto* aboutCard = makeCard(tr("About"));
     auto* aboutLayout = new QVBoxLayout(aboutCard);
     aboutLayout->setSpacing(8);
 
@@ -1393,12 +1393,12 @@ void MainWindow::setupSettingsPage() {
     aboutLayout->addWidget(descLabel);
 
     // Update status, matching the macOS app's About panel.
-    m_updateLabel = new QLabel("Checking for updates...");
+    m_updateLabel = new QLabel(tr("Checking for updates..."));
     m_updateLabel->setStyleSheet("font-size: 12px; color: palette(mid);");
     m_updateLabel->setWordWrap(true);
     aboutLayout->addWidget(m_updateLabel);
 
-    m_updateBtn = new QPushButton("Download Update");
+    m_updateBtn = new QPushButton(tr("Download Update"));
     m_updateBtn->setStyleSheet(
         "QPushButton { background-color: #0078D4; color: #ffffff; font-weight: bold; "
         "padding: 8px 20px; border-radius: 6px; border: none; }"
@@ -1409,13 +1409,13 @@ void MainWindow::setupSettingsPage() {
     });
     aboutLayout->addWidget(m_updateBtn);
 
-    auto* recheckBtn = new QPushButton("Check Again");
+    auto* recheckBtn = new QPushButton(tr("Check Again"));
     recheckBtn->setStyleSheet(
         "QPushButton { background-color: transparent; color: palette(mid); "
         "padding: 4px 0px; border: none; text-align: left; }"
         "QPushButton:hover { color: palette(window-text); }");
     connect(recheckBtn, &QPushButton::clicked, this, [this]() {
-        if (m_updateLabel) m_updateLabel->setText("Checking for updates...");
+        if (m_updateLabel) m_updateLabel->setText(tr("Checking for updates..."));
         if (m_updateChecker) m_updateChecker->check();
     });
     aboutLayout->addWidget(recheckBtn);
@@ -1423,11 +1423,11 @@ void MainWindow::setupSettingsPage() {
     layout->addWidget(aboutCard);
 
     // Connection card
-    auto* connCard = makeCard("Connection");
+    auto* connCard = makeCard(tr("Connection"));
     auto* connLayout = new QVBoxLayout(connCard);
     connLayout->setSpacing(10);
 
-    auto* portInfo = new QLabel("Listening on port 51820 (TCP)");
+    auto* portInfo = new QLabel(tr("Listening on port 51820 (TCP)"));
     portInfo->setStyleSheet("font-size: 13px; color: palette(mid);");
     connLayout->addWidget(portInfo);
 
@@ -1453,7 +1453,7 @@ void MainWindow::setupSettingsPage() {
     layout->addWidget(connCard);
 
     // Changelog card
-    auto* changeCard = makeCard("What's New");
+    auto* changeCard = makeCard(tr("What's New"));
     auto* changeLayout = new QVBoxLayout(changeCard);
     changeLayout->setSpacing(10);
 

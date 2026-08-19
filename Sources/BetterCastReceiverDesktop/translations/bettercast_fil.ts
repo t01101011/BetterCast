@@ -55,5 +55,53 @@
         <source>BetterCast will use the new language the next time it starts.</source>
         <translation>Gagamitin ng BetterCast ang bagong wika sa susunod na pagbukas nito.</translation>
     </message>
+    <message>
+        <source>Appearance</source>
+        <translation>Anyo</translation>
+    </message>
+    <message>
+        <source>Theme:</source>
+        <translation>Tema:</translation>
+    </message>
+    <message>
+        <source>Light</source>
+        <translation>Maliwanag</translation>
+    </message>
+    <message>
+        <source>Dark</source>
+        <translation>Madilim</translation>
+    </message>
+    <message>
+        <source>Glass</source>
+        <translation>Salamin</translation>
+    </message>
+    <message>
+        <source>About</source>
+        <translation>Tungkol</translation>
+    </message>
+    <message>
+        <source>Checking for updates...</source>
+        <translation>Naghahanap ng update...</translation>
+    </message>
+    <message>
+        <source>Download Update</source>
+        <translation>I-download ang Update</translation>
+    </message>
+    <message>
+        <source>Check Again</source>
+        <translation>Suriing Muli</translation>
+    </message>
+    <message>
+        <source>Connection</source>
+        <translation>Koneksyon</translation>
+    </message>
+    <message>
+        <source>Listening on port 51820 (TCP)</source>
+        <translation>Nakikinig sa port 51820 (TCP)</translation>
+    </message>
+    <message>
+        <source>What's New</source>
+        <translation>Ano ang Bago</translation>
+    </message>
 </context>
 </TS>

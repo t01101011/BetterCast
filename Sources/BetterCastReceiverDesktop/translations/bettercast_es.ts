@@ -55,5 +55,53 @@
         <source>BetterCast will use the new language the next time it starts.</source>
         <translation>BetterCast usará el nuevo idioma la próxima vez que se inicie.</translation>
     </message>
+    <message>
+        <source>Appearance</source>
+        <translation>Apariencia</translation>
+    </message>
+    <message>
+        <source>Theme:</source>
+        <translation>Tema:</translation>
+    </message>
+    <message>
+        <source>Light</source>
+        <translation>Claro</translation>
+    </message>
+    <message>
+        <source>Dark</source>
+        <translation>Oscuro</translation>
+    </message>
+    <message>
+        <source>Glass</source>
+        <translation>Cristal</translation>
+    </message>
+    <message>
+        <source>About</source>
+        <translation>Acerca de</translation>
+    </message>
+    <message>
+        <source>Checking for updates...</source>
+        <translation>Buscando actualizaciones...</translation>
+    </message>
+    <message>
+        <source>Download Update</source>
+        <translation>Descargar actualización</translation>
+    </message>
+    <message>
+        <source>Check Again</source>
+        <translation>Comprobar de nuevo</translation>
+    </message>
+    <message>
+        <source>Connection</source>
+        <translation>Conexión</translation>
+    </message>
+    <message>
+        <source>Listening on port 51820 (TCP)</source>
+        <translation>Escuchando en el puerto 51820 (TCP)</translation>
+    </message>
+    <message>
+        <source>What's New</source>
+        <translation>Novedades</translation>
+    </message>
 </context>
 </TS>
