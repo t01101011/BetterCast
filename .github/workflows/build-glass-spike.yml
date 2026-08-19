@@ -340,6 +340,11 @@ jobs:
 
       - name: Collect
         shell: pwsh
+        env:
+          # For the scrcpy release lookup below. Unauthenticated calls to the
+          # GitHub API are rate limited per runner IP, which on a shared pool
+          # means the build fails for something no one here did.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
 
@@ -416,6 +421,33 @@ jobs:
           # glyph, which is not wrong but is not the logo either - so fail here
           # rather than ship a build that quietly lost its own mark.
           if (-not (Test-Path 'out/bettercast-logo.png')) { throw "bettercast-logo.png was not generated" }
+
+          # scrcpy and adb, for mirroring an Android phone onto this PC. Not
+          # reimplemented: Genymobile's tool already does this well, it is
+          # Apache-2.0 which sits fine inside a GPLv3 project, and it brings
+          # Google's adb with it.
+          #
+          # The release is resolved rather than pinned to a guessed filename -
+          # the asset name carries the version, so a pin goes stale silently.
+          # The version that was used is printed, since "latest" means this is
+          # not reproducible on its own.
+          $hdr = @{ 'User-Agent' = 'bettercast-build'
+                    'Authorization' = "Bearer $env:GITHUB_TOKEN" }
+          $rel = Invoke-RestMethod "https://api.github.com/repos/Genymobile/scrcpy/releases/latest" -Headers $hdr
+          $asset = $rel.assets | Where-Object { $_.name -like 'scrcpy-win64-*.zip' } | Select-Object -First 1
+          if (-not $asset) { throw "no scrcpy win64 asset in $($rel.tag_name)" }
+          Write-Host "bundling $($asset.name) ($([math]::Round($asset.size/1MB,1)) MB)"
+          Invoke-WebRequest $asset.browser_download_url -OutFile 'scrcpy.zip' `
+            -Headers @{ 'User-Agent' = 'bettercast-build' }
+          Expand-Archive 'scrcpy.zip' -DestinationPath 'scrcpy-tmp' -Force
+          $sdir = Get-ChildItem 'scrcpy-tmp' -Directory | Select-Object -First 1
+          if (-not $sdir) { throw "the scrcpy archive had no directory in it" }
+          Copy-Item $sdir.FullName 'out/scrcpy' -Recurse
+          # The bridge looks for exactly these two names beside the exe.
+          foreach ($need in 'scrcpy.exe', 'adb.exe') {
+            if (-not (Test-Path "out/scrcpy/$need")) { throw "$need missing from the scrcpy bundle" }
+          }
+          Set-Content 'out/scrcpy/BUNDLED_VERSION.txt' $rel.tag_name -Encoding utf8
 
           # Both apps load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {

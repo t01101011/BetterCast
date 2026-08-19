@@ -137,6 +137,38 @@ struct StreamSettings {
 StreamSettings settingsFor(const std::string& deviceName);
 void setSettingsFor(const std::string& deviceName, const StreamSettings& s);
 
+// ── Android over USB ─────────────────────────────────────────────────────
+//
+// The one feature that runs the other way. Everything else here sends this
+// PC's screen somewhere; this shows an Android phone's screen on this PC,
+// over the USB cable, using scrcpy and adb - the tools Google and Genymobile
+// already ship for it, bundled beside the exe rather than reimplemented.
+//
+// adb is not run until asked. Starting it leaves a daemon behind on the
+// machine, which is not something to do to someone who never opened this
+// panel, so watching is something the user switches on.
+
+struct AndroidDevice {
+    std::string serial;
+    std::string model;
+    // adb's own word for it: "device" is ready, "unauthorized" means the
+    // phone is waiting for its owner to accept this computer, "offline" means
+    // the cable or the daemon is unhappy.
+    std::string state;
+};
+
+bool androidToolsPresent();
+void watchAndroid(bool on);
+bool androidWatching();
+const std::vector<AndroidDevice>& androidDevices();
+
+// Opens the phone's screen in a window of its own. Returns false if it could
+// not be launched; androidStatus() says why.
+bool mirrorAndroid(const std::string& serial);
+
+// The last thing adb or scrcpy had to say, for the UI to show.
+std::string androidStatus();
+
 // Proves an OpenGL widget and a D3D11 swapchain survive in one process, which
 // is the one coexistence question the architecture rests on. Returns false if
 // the window could not be created.

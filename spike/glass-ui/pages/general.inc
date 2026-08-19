@@ -157,6 +157,55 @@
                 }
                 Glass::EndPanel();
 
+                // The one panel that runs the other way: the phone's screen
+                // arrives here, rather than this PC's screen going out. Kept
+                // separate from the device list above for that reason, and
+                // because a phone on a cable is not something mDNS ever sees.
+                Glass::BeginPanel("ANDROID OVER USB");
+                if (!BetterCastBridge::androidToolsPresent()) {
+                    ImGui::TextWrapped("The Android tools are not installed beside "
+                                       "BetterCast, so a phone cannot be mirrored from "
+                                       "this build.");
+                } else if (!BetterCastBridge::androidWatching()) {
+                    ImGui::TextWrapped("Shows an Android phone's screen here, over the "
+                                       "cable. Turn on USB debugging on the phone, plug "
+                                       "it in, then look for it.");
+                    ImGui::Dummy(ImVec2(0, 8));
+                    if (Glass::Button("Look for Android Devices", false)) {
+                        BetterCastBridge::watchAndroid(true);
+                    }
+                } else {
+                    const auto& bcPhones = BetterCastBridge::androidDevices();
+                    if (bcPhones.empty()) {
+                        ImGui::TextDisabled("Nothing on the cable yet.");
+                        ImGui::TextWrapped("Plug the phone in and accept the debugging "
+                                           "prompt it shows.");
+                    }
+                    for (size_t i = 0; i < bcPhones.size(); i++) {
+                        const auto& ph = bcPhones[i];
+                        ImGui::PushID((int)i);
+                        Glass::StatRow(ph.model.c_str(), ph.state.c_str());
+                        if (ph.state == "device") {
+                            if (Glass::Button("Mirror This Phone Here", true)) {
+                                BetterCastBridge::mirrorAndroid(ph.serial);
+                            }
+                        } else if (ph.state == "unauthorized") {
+                            ImGui::TextWrapped("The phone is waiting for you to allow "
+                                               "this computer. Look at its screen.");
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::Dummy(ImVec2(0, 6));
+                    if (Glass::Button("Stop Looking", false)) {
+                        BetterCastBridge::watchAndroid(false);
+                    }
+                }
+                {
+                    const std::string st = BetterCastBridge::androidStatus();
+                    if (!st.empty()) Glass::StatRow("Status", st.c_str());
+                }
+                Glass::EndPanel();
+
                 // The architecture questions, answered on screen rather than argued.
                 Glass::BeginPanel("ARCHITECTURE PROBE");
                 Glass::StatRow("Qt core", "running in this render loop");

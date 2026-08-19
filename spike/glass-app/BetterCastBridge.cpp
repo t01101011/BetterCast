@@ -24,6 +24,9 @@
 #include <QUrl>
 #include <QCoreApplication>
 #include <QOpenGLWidget>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QStandardPaths>
 #include <QTimer>
 
 #include <memory>
@@ -36,6 +39,13 @@
 #endif
 
 namespace BetterCastBridge {
+
+// Declared up here rather than below the helpers, because the helpers call
+// them: anything inside the anonymous namespace that asks for a frame needs
+// requestRedraw to already be a name.
+void requestRedraw();   // defined below, used by init's connections
+int  sessionCount();    // defined below, used by the render throttle
+
 namespace {
 
 std::unique_ptr<QApplication>     g_app;
@@ -136,6 +146,101 @@ QString mainDisplayName() {
     return QString();
 }
 
+// ── Android over USB ─────────────────────────────────────────────────────
+
+std::vector<AndroidDevice> g_androids;
+std::string                g_androidStatus;
+bool                       g_androidWatching = false;
+QProcess*                  g_adb       = nullptr;   // one probe at a time
+QTimer*                    g_adbTimer  = nullptr;
+
+// scrcpy and adb, bundled in a folder beside the exe. Falls back to PATH, so
+// a machine that already has the Android tools installed works too.
+QString androidTool(const QString& exe) {
+    const QString bundled =
+        QCoreApplication::applicationDirPath() + "/scrcpy/" + exe;
+    if (QFileInfo::exists(bundled)) return bundled;
+
+    QString base = exe;
+    if (base.endsWith(".exe", Qt::CaseInsensitive)) base.chop(4);
+    return QStandardPaths::findExecutable(base);
+}
+
+void parseAdbDevices(const QString& out) {
+    std::vector<AndroidDevice> found;
+    const QStringList lines = out.split(QChar('\n'), Qt::SkipEmptyParts);
+    for (const QString& raw : lines) {
+        const QString line = raw.trimmed();
+        // The header, and the noise adb prints while starting its daemon.
+        if (line.isEmpty()) continue;
+        if (line.startsWith("List of devices")) continue;
+        if (line.startsWith('*')) continue;
+
+        const QStringList parts = line.split(QRegularExpression("\\s+"),
+                                             Qt::SkipEmptyParts);
+        if (parts.size() < 2) continue;
+
+        AndroidDevice d;
+        d.serial = parts[0].toStdString();
+        d.state  = parts[1].toStdString();
+        // "model:Pixel_7" when adb was asked for the long listing. Underscores
+        // are adb's, not the owner's, so they read better as spaces.
+        for (int i = 2; i < parts.size(); i++) {
+            if (!parts[i].startsWith("model:")) continue;
+            QString m = parts[i].mid(6);
+            m.replace(QChar('_'), QChar(' '));
+            d.model = m.toStdString();
+            break;
+        }
+        if (d.model.empty()) d.model = d.serial;
+        found.push_back(std::move(d));
+    }
+    g_androids.swap(found);
+}
+
+void probeAndroid() {
+    if (g_adb) return;   // a probe is already out
+
+    const QString adb = androidTool("adb.exe");
+    if (adb.isEmpty()) {
+        g_androidStatus = "adb was not found beside BetterCast or on this PC";
+        return;
+    }
+
+    // The lambdas hold the process they belong to rather than reading the
+    // global. errorOccurred and finished can both fire, and by the time the
+    // second arrives the global may already point at the next probe - acting
+    // on that one would clear a result that has not happened yet.
+    QProcess* p = new QProcess();
+    g_adb = p;
+
+    QObject::connect(p, &QProcess::finished,
+                     [p](int code, QProcess::ExitStatus) {
+                         const QString out =
+                             QString::fromUtf8(p->readAllStandardOutput());
+                         if (code == 0) {
+                             parseAdbDevices(out);
+                             g_androidStatus = g_androids.empty()
+                                 ? std::string("no Android device on the cable yet")
+                                 : "adb sees " + std::to_string(g_androids.size()) +
+                                   (g_androids.size() == 1 ? " device" : " devices");
+                         } else {
+                             g_androidStatus = "adb exited with " + std::to_string(code);
+                         }
+                         if (g_adb == p) g_adb = nullptr;
+                         p->deleteLater();
+                         requestRedraw();
+                     });
+    QObject::connect(p, &QProcess::errorOccurred,
+                     [p](QProcess::ProcessError) {
+                         g_androidStatus = "adb could not be started";
+                         if (g_adb == p) g_adb = nullptr;
+                         p->deleteLater();
+                         requestRedraw();
+                     });
+    p->start(adb, QStringList() << "devices" << "-l");
+}
+
 // Settings for one device, under a key of its own.
 QString deviceKey(const std::string& name) {
     // A device name is free text - it can contain anything the owner typed,
@@ -146,9 +251,6 @@ QString deviceKey(const std::string& name) {
 }
 
 } // namespace
-
-void requestRedraw();   // defined below, used by init's connections
-int  sessionCount();    // defined below, used by the render throttle
 
 bool init(int argc, char** argv) {
     if (g_app) return true;
@@ -325,6 +427,22 @@ int currentFrameCap() {
 
 void shutdown() {
     g_probe.reset();
+
+    // Before Qt goes: a timer that fires during teardown would start an adb
+    // process nobody is left to collect. g_adb is only non-null while no
+    // deleteLater is pending for it, so deleting it here cannot double up.
+    if (g_adbTimer) {
+        g_adbTimer->stop();
+        delete g_adbTimer;
+        g_adbTimer = nullptr;
+    }
+    if (g_adb) {
+        g_adb->kill();
+        g_adb->waitForFinished(1000);
+        delete g_adb;
+        g_adb = nullptr;
+    }
+
 #ifdef ENABLE_SENDER
     if (g_sender) {
         g_sender->stopAll();       // joins the capture threads before Qt goes
@@ -613,6 +731,73 @@ void setSettingsFor(const std::string& deviceName, const StreamSettings& v) {
     s.setValue(k + "bitrate", v.bitrateMbps);
     s.setValue(k + "width",   v.width);
     s.setValue(k + "height",  v.height);
+}
+
+// ── Android over USB ─────────────────────────────────────────────────────
+
+bool androidToolsPresent() {
+    return !androidTool("scrcpy.exe").isEmpty() && !androidTool("adb.exe").isEmpty();
+}
+
+void watchAndroid(bool on) {
+    g_androidWatching = on;
+    if (!on) {
+        if (g_adbTimer) g_adbTimer->stop();
+        g_androids.clear();
+        g_androidStatus.clear();
+        requestRedraw();
+        return;
+    }
+
+    if (!g_adbTimer) {
+        g_adbTimer = new QTimer();
+        QObject::connect(g_adbTimer, &QTimer::timeout, []() { probeAndroid(); });
+    }
+    // Often enough that plugging a cable in feels immediate, rarely enough
+    // that this is not spawning a process every frame.
+    g_adbTimer->start(3000);
+    probeAndroid();
+    requestRedraw();
+}
+
+bool androidWatching() {
+    return g_androidWatching;
+}
+
+const std::vector<AndroidDevice>& androidDevices() {
+    return g_androids;
+}
+
+bool mirrorAndroid(const std::string& serial) {
+    const QString exe = androidTool("scrcpy.exe");
+    if (exe.isEmpty()) {
+        g_androidStatus = "scrcpy was not found beside BetterCast or on this PC";
+        return false;
+    }
+
+    QStringList args;
+    if (!serial.empty()) args << "-s" << QString::fromStdString(serial);
+    args << "--window-title" << "BetterCast - Android";
+
+    // Its own process and its own window, not a widget inside this one.
+    // scrcpy pushes a server to the phone and decodes the stream itself;
+    // wrapping that would mean reimplementing it, and it already works.
+    //
+    // Started in its own directory because that is where it looks for
+    // scrcpy-server, which it has to push to the phone before anything
+    // appears.
+    const QString dir = QFileInfo(exe).absolutePath();
+    const bool ok = QProcess::startDetached(exe, args, dir);
+    g_androidStatus = ok ? "scrcpy started" : "scrcpy could not be started";
+    LogManager::instance().log("Glass: " + QString::fromStdString(g_androidStatus) +
+                               (serial.empty() ? QString()
+                                               : " for " + QString::fromStdString(serial)));
+    requestRedraw();
+    return ok;
+}
+
+std::string androidStatus() {
+    return g_androidStatus;
 }
 
 } // namespace BetterCastBridge
