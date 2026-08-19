@@ -51,7 +51,7 @@ jobs:
         run: |
           pip install aqtinstall
           python3 -m aqt install-qt linux desktop ${{ env.QT_VERSION }} linux_gcc_64 \
-            --modules qtmultimedia \
+            --modules qtmultimedia qttools \
             --outputdir $HOME/Qt
           echo "Qt6_DIR=$HOME/Qt/${{ env.QT_VERSION }}/gcc_64" >> $GITHUB_ENV
           echo "$HOME/Qt/${{ env.QT_VERSION }}/gcc_64/bin" >> $GITHUB_PATH

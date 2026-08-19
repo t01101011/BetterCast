@@ -95,6 +95,7 @@ endif()
 set(SOURCES
     main.cpp
     MainWindow.cpp
+    Language.cpp
     UpdateChecker.cpp
     Theme.cpp
     DisplayArrangement.cpp
@@ -111,6 +112,7 @@ set(SOURCES
 
 set(HEADERS
     MainWindow.h
+    Language.h
     UpdateChecker.h
     Theme.h
     DisplayArrangement.h
@@ -239,6 +241,25 @@ if(WIN32)
     # windowsapp:  C++/WinRT umbrella import lib, for NetworkOperatorTetheringManager
     target_link_libraries(BetterCastReceiver PRIVATE ws2_32 dwmapi windowsapp)
     set_target_properties(BetterCastReceiver PROPERTIES WIN32_EXECUTABLE TRUE)
+endif()
+
+# UI translations, compiled into the binary as resources.
+#
+# Optional on purpose: lrelease ships in Qt's LinguistTools, which is a
+# separate aqtinstall module. A developer without it should still get a
+# working English build rather than a configure error, so a missing
+# LinguistTools only costs the translations.
+find_package(Qt6 QUIET COMPONENTS LinguistTools)
+if(Qt6LinguistTools_FOUND)
+    qt_add_translations(BetterCastReceiver
+        TS_FILES
+            translations/bettercast_es.ts
+            translations/bettercast_fil.ts
+        RESOURCE_PREFIX "/i18n"
+    )
+    message(STATUS "Translations enabled (es, fil)")
+else()
+    message(STATUS "Qt LinguistTools not found - building English only")
 endif()
 
 # Install

@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "UpdateChecker.h"
+#include "Language.h"
 #ifdef _WIN32
 #include "GlassBackdrop.h"
 #endif
@@ -542,8 +543,8 @@ void MainWindow::rebuildSidebar() {
     QSignalBlocker block(m_sidebarList);   // repopulating must not fire selection
     m_sidebarList->clear();
 
-    addSidebarSection(m_sidebarList, "DEVICES");
-    addSidebarItem(m_sidebarList, Icons::overview(), "Overview", m_pageOverview);
+    addSidebarSection(m_sidebarList, tr("DEVICES"));
+    addSidebarItem(m_sidebarList, Icons::overview(), tr("Overview"), m_pageOverview);
 
 #ifdef ENABLE_SENDER
     if (m_devices.isEmpty()) {
@@ -570,19 +571,19 @@ void MainWindow::rebuildSidebar() {
         }
     }
 
-    addSidebarSection(m_sidebarList, "SEND");
-    addSidebarItem(m_sidebarList, Icons::send(), "Send Screen", m_pageSend);
+    addSidebarSection(m_sidebarList, tr("SEND"));
+    addSidebarItem(m_sidebarList, Icons::send(), tr("Send Screen"), m_pageSend);
 #endif
 
-    addSidebarSection(m_sidebarList, "RECEIVE");
-    addSidebarItem(m_sidebarList, Icons::receive(), "Receive Screen", m_pageReceive);
+    addSidebarSection(m_sidebarList, tr("RECEIVE"));
+    addSidebarItem(m_sidebarList, Icons::receive(), tr("Receive Screen"), m_pageReceive);
 
     addSidebarSection(m_sidebarList, "");
 #ifdef _WIN32
-    addSidebarItem(m_sidebarList, Icons::wifi(), "Wi-Fi Hotspot", m_pageHotspot);
+    addSidebarItem(m_sidebarList, Icons::wifi(), tr("Wi-Fi Hotspot"), m_pageHotspot);
 #endif
-    addSidebarItem(m_sidebarList, Icons::settings(), "Settings", m_pageSettings);
-    addSidebarItem(m_sidebarList, Icons::logs(), "Logs", m_pageLogs);
+    addSidebarItem(m_sidebarList, Icons::settings(), tr("Settings"), m_pageSettings);
+    addSidebarItem(m_sidebarList, Icons::logs(), tr("Logs"), m_pageLogs);
 
     // Restore selection: prefer the same device, else the same fixed page.
     for (int i = 0; i < m_sidebarList->count(); i++) {
@@ -726,7 +727,7 @@ void MainWindow::setupSendPage() {
     layout->setContentsMargins(40, 30, 40, 30);
     layout->setSpacing(16);
 
-    auto* pageTitle = new QLabel("Send Screen");
+    auto* pageTitle = new QLabel(tr("Send Screen"));
     pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     layout->addWidget(pageTitle);
 
@@ -1034,7 +1035,7 @@ void MainWindow::setupReceivePage() {
     layout->setContentsMargins(40, 30, 40, 30);
     layout->setSpacing(16);
 
-    auto* pageTitle = new QLabel("Receive Screen");
+    auto* pageTitle = new QLabel(tr("Receive Screen"));
     pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     layout->addWidget(pageTitle);
 
@@ -1145,7 +1146,7 @@ void MainWindow::setupHotspotPage() {
     layout->setContentsMargins(40, 30, 40, 30);
     layout->setSpacing(16);
 
-    auto* pageTitle = new QLabel("Wi-Fi Hotspot");
+    auto* pageTitle = new QLabel(tr("Wi-Fi Hotspot"));
     pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     layout->addWidget(pageTitle);
 
@@ -1300,7 +1301,7 @@ void MainWindow::setupSettingsPage() {
     layout->setContentsMargins(40, 30, 40, 30);
     layout->setSpacing(16);
 
-    auto* pageTitle = new QLabel("Settings");
+    auto* pageTitle = new QLabel(tr("Settings"));
     pageTitle->setStyleSheet("font-size: 22px; font-weight: 600;");
     layout->addWidget(pageTitle);
 
@@ -1330,6 +1331,38 @@ void MainWindow::setupSettingsPage() {
             [this](int idx) {
                 Theme::setSavedMode(static_cast<Theme::Mode>(idx));
                 applyTheme();
+            });
+
+    // Language picker, beside the theme it behaves like.
+    auto* langRow = new QHBoxLayout();
+    auto* langLabel = new QLabel(tr("Language:"));
+    langLabel->setStyleSheet("font-size: 13px;");
+    langRow->addWidget(langLabel);
+
+    auto* langCombo = new QComboBox();
+    langCombo->addItem(tr("Follow system"), QString());
+    for (const auto& e : Language::available()) {
+        // Listed in the language's own name: someone hunting for Filipino is
+        // looking for "Filipino", not for whatever English calls it.
+        langCombo->addItem(e.endonym, e.code);
+    }
+    {
+        const int idx = langCombo->findData(Language::savedCode());
+        langCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    langRow->addWidget(langCombo);
+    langRow->addStretch();
+    themeLayout->addLayout(langRow);
+
+    connect(langCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, langCombo](int) {
+                Language::setSavedCode(langCombo->currentData().toString());
+                // Qt retranslates live only for UI built from .ui files; this
+                // one is hand-built, so say plainly that it applies next launch
+                // rather than appearing to do nothing.
+                QMessageBox::information(
+                    this, tr("Language"),
+                    tr("BetterCast will use the new language the next time it starts."));
             });
 
     auto* themeNote = new QLabel(
@@ -1477,7 +1510,7 @@ void MainWindow::setupLogsPage() {
     // Title row with buttons
     auto* titleRow = new QHBoxLayout();
 
-    auto* pageTitle = new QLabel("Logs");
+    auto* pageTitle = new QLabel(tr("Logs"));
     pageTitle->setStyleSheet("font-size: 22px; font-weight: bold; color: palette(window-text);");
     titleRow->addWidget(pageTitle);
 

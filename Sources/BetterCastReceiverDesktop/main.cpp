@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QDebug>
 #include "MainWindow.h"
+#include "Language.h"
+#include <QTranslator>
 
 #ifdef _WIN32
 // Add Windows Firewall exceptions for mDNS and streaming
@@ -86,6 +88,13 @@ int main(int argc, char* argv[]) {
     // button and Alt-Tab; handing it the raw square PNG left all three square
     // even after the in-app logo and the generated .ico were rounded.
     app.setWindowIcon(Icons::appIcon());
+
+    // Before MainWindow is constructed: tr() resolves when a string is built,
+    // and every label in the UI is built in that constructor. Installing the
+    // translator afterwards would leave the whole window in English until
+    // something happened to rebuild it.
+    QTranslator translator;
+    Language::install(&translator);
 
 #ifdef _WIN32
     ensureFirewallRule();
