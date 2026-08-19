@@ -249,7 +249,18 @@ endif()
 # separate aqtinstall module. A developer without it should still get a
 # working English build rather than a configure error, so a missing
 # LinguistTools only costs the translations.
+# CI sets this so a missing lrelease fails loudly. Without it, the optional
+# path below would quietly ship an English-only build and the first anyone
+# would know is a user asking why the language picker does nothing.
+option(REQUIRE_TRANSLATIONS "Fail the build if translations cannot be compiled" OFF)
+
 find_package(Qt6 QUIET COMPONENTS LinguistTools)
+if(NOT Qt6LinguistTools_FOUND AND REQUIRE_TRANSLATIONS)
+    message(FATAL_ERROR
+        "Qt LinguistTools not found, but REQUIRE_TRANSLATIONS=ON. "
+        "lrelease ships in the base Qt 6 desktop install; if it is genuinely "
+        "absent the Qt install step needs fixing, not this check.")
+endif()
 if(Qt6LinguistTools_FOUND)
     qt_add_translations(BetterCastReceiver
         TS_FILES

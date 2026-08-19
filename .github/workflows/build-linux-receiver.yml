@@ -51,7 +51,7 @@ jobs:
         run: |
           pip install aqtinstall
           python3 -m aqt install-qt linux desktop ${{ env.QT_VERSION }} linux_gcc_64 \
-            --modules qtmultimedia qttools \
+            --modules qtmultimedia \
             --outputdir $HOME/Qt
           echo "Qt6_DIR=$HOME/Qt/${{ env.QT_VERSION }}/gcc_64" >> $GITHUB_ENV
           echo "$HOME/Qt/${{ env.QT_VERSION }}/gcc_64/bin" >> $GITHUB_PATH
@@ -65,7 +65,8 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_PREFIX_PATH="$Qt6_DIR" \
-            -DCMAKE_INSTALL_PREFIX=/usr
+            -DCMAKE_INSTALL_PREFIX=/usr \
+            -DREQUIRE_TRANSLATIONS=ON
 
       - name: Build
         run: |

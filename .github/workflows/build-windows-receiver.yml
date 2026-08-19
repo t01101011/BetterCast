@@ -45,7 +45,7 @@ jobs:
         run: |
           pip install aqtinstall
           python -m aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2019_64 `
-            --modules qtmultimedia qttools `
+            --modules qtmultimedia `
             --outputdir C:/Qt
           echo "Qt6_DIR=C:/Qt/${{ env.QT_VERSION }}/msvc2019_64" >> $env:GITHUB_ENV
           echo "C:/Qt/${{ env.QT_VERSION }}/msvc2019_64/bin" >> $env:GITHUB_PATH
@@ -117,7 +117,8 @@ jobs:
           cmake .. -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="$env:Qt6_DIR" `
-            -DENABLE_SENDER=ON
+            -DENABLE_SENDER=ON `
+            -DREQUIRE_TRANSLATIONS=ON
 
       - name: Build
         shell: pwsh
