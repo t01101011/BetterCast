@@ -75,6 +75,30 @@ void shutdown();
 // Receivers seen on the network right now, newest state each call.
 const std::vector<Device>& devices();
 
+// ── Streaming ────────────────────────────────────────────────────────────
+//
+// The real SenderController, the same one the shipping app drives: DXGI
+// duplication into a hardware H.264 encoder, one virtual display per
+// receiver. Nothing here reimplements any of it.
+
+// Begin streaming to a receiver. width/height of 0 means "match the primary".
+// Returns false if no display could be claimed - see lastLogLine() for why,
+// since the reasons are worth reading rather than reducing to a bool.
+bool startSending(const std::string& host, uint16_t port,
+                  int fps, int bitrateMbps, int width, int height);
+
+void stopSending(const std::string& host);
+bool isSendingTo(const std::string& host);
+int  sessionCount();
+
+// Virtual display this receiver's stream is being captured from, empty when
+// it is not streaming.
+std::string displayForReceiver(const std::string& host);
+
+// Encoder actually in use, e.g. "h264_nvenc". Empty until the first stream
+// starts, because the encoder is probed at that point rather than up front.
+std::string encoderInfo();
+
 // Proves an OpenGL widget and a D3D11 swapchain survive in one process, which
 // is the one coexistence question the architecture rests on. Returns false if
 // the window could not be created.

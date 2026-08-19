@@ -2,6 +2,9 @@
 
 #include "LogManager.h"
 #include "ServiceDiscovery.h"
+#ifdef ENABLE_SENDER
+#include "sender/SenderController.h"
+#endif
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -23,6 +26,9 @@ namespace {
 std::unique_ptr<QApplication>     g_app;
 std::unique_ptr<ServiceDiscovery> g_discovery;
 std::unique_ptr<QOpenGLWidget>    g_probe;
+#ifdef ENABLE_SENDER
+std::unique_ptr<SenderController> g_sender;
+#endif
 
 std::vector<Device> g_devices;
 std::string         g_lastLog;
@@ -88,6 +94,19 @@ bool init(int argc, char** argv) {
     QObject::connect(g_discovery.get(), &ServiceDiscovery::serviceLost,
                      [](const QString&) { refreshDevices(); requestRedraw(); });
     g_discovery->startBrowsing();
+
+#ifdef ENABLE_SENDER
+    g_sender = std::make_unique<SenderController>();
+    // Every one of these changes something the render loop cannot see, so each
+    // has to ask for a frame or the UI sits on a stale picture until the user
+    // happens to move the mouse.
+    QObject::connect(g_sender.get(), &SenderController::sessionsChanged,
+                     []() { requestRedraw(); });
+    QObject::connect(g_sender.get(), &SenderController::error,
+                     [](const QString& m) { LogManager::instance().log("Sender error: " + m); });
+    QObject::connect(g_sender.get(), &SenderController::statusChanged,
+                     [](const QString& m) { LogManager::instance().log(m); });
+#endif
 
     LogManager::instance().log("Glass: BetterCast core running inside the D3D11 loop");
     return true;
@@ -160,6 +179,12 @@ int currentFrameCap() {
 
 void shutdown() {
     g_probe.reset();
+#ifdef ENABLE_SENDER
+    if (g_sender) {
+        g_sender->stopAll();       // joins the capture threads before Qt goes
+        g_sender.reset();
+    }
+#endif
     if (g_discovery) {
         g_discovery->stopBrowsing();
         g_discovery.reset();
@@ -198,6 +223,64 @@ bool probeWindowOpen() {
 
 std::string lastLogLine() {
     return g_lastLog;
+}
+
+// ── Streaming ────────────────────────────────────────────────────────────
+
+bool startSending(const std::string& host, uint16_t port,
+                  int fps, int bitrateMbps, int width, int height) {
+#ifdef ENABLE_SENDER
+    if (!g_sender) return false;
+    const bool ok = g_sender->startSending(QString::fromStdString(host), port,
+                                           fps, bitrateMbps, QString(), width, height);
+    requestRedraw();
+    return ok;
+#else
+    (void)host; (void)port; (void)fps; (void)bitrateMbps; (void)width; (void)height;
+    return false;
+#endif
+}
+
+void stopSending(const std::string& host) {
+#ifdef ENABLE_SENDER
+    if (g_sender) g_sender->stopSending(QString::fromStdString(host));
+    requestRedraw();
+#else
+    (void)host;
+#endif
+}
+
+bool isSendingTo(const std::string& host) {
+#ifdef ENABLE_SENDER
+    return g_sender && g_sender->isSendingTo(QString::fromStdString(host));
+#else
+    (void)host; return false;
+#endif
+}
+
+int sessionCount() {
+#ifdef ENABLE_SENDER
+    return g_sender ? g_sender->sessionCount() : 0;
+#else
+    return 0;
+#endif
+}
+
+std::string displayForReceiver(const std::string& host) {
+#ifdef ENABLE_SENDER
+    if (!g_sender) return {};
+    return g_sender->displayForReceiver(QString::fromStdString(host)).toStdString();
+#else
+    (void)host; return {};
+#endif
+}
+
+std::string encoderInfo() {
+#ifdef ENABLE_SENDER
+    return g_sender ? g_sender->encoderInfo().toStdString() : std::string();
+#else
+    return {};
+#endif
 }
 
 } // namespace BetterCastBridge

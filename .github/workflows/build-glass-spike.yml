@@ -32,6 +32,10 @@ concurrency:
 
 env:
   QT_VERSION: '6.7.0'
+  # Same spec and cache tag as build-windows-receiver.yml, so this shares that
+  # workflow's vcpkg cache instead of building FFmpeg a second time.
+  VCPKG_SPEC: 'ffmpeg[x264,nvcodec,amf]:x64-windows'
+  VCPKG_CACHE_TAG: 'ffmpeg-x264-nvcodec-amf-v1'
 
 jobs:
   build-spike:
@@ -57,6 +61,24 @@ jobs:
             --outputdir C:/Qt
           echo "Qt6_DIR=C:/Qt/${{ env.QT_VERSION }}/msvc2019_64" >> $env:GITHUB_ENV
           echo "C:/Qt/${{ env.QT_VERSION }}/msvc2019_64/bin" >> $env:GITHUB_PATH
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/buildtrees
+            C:/vcpkg/packages
+          key: vcpkg-x64-windows-${{ env.VCPKG_CACHE_TAG }}
+          restore-keys: |
+            vcpkg-x64-windows-
+
+      - name: Install FFmpeg via vcpkg
+        shell: pwsh
+        run: |
+          vcpkg install "$env:VCPKG_SPEC" --recurse
+        env:
+          VCPKG_ROOT: C:/vcpkg
 
       - name: Build liquidDX11 unmodified
         shell: pwsh
@@ -153,10 +175,29 @@ jobs:
             "    `"$core/ServiceDiscovery.cpp`"",
             "    `"$core/ServiceDiscovery.h`"",
             "    `"$core/LogManager.h`"",
+            "    `"$core/sender/SenderController.cpp`"",
+            "    `"$core/sender/SenderController.h`"",
+            "    `"$core/sender/VideoEncoderFF.cpp`"",
+            "    `"$core/sender/NetworkSender.cpp`"",
+            "    `"$core/sender/NetworkSender.h`"",
+            "    `"$core/sender/ScreenCaptureWin.cpp`"",
+            "    `"$core/sender/VirtualDisplayVDD.cpp`"",
+            "    `"$core/sender/VirtualDisplayVDD.h`"",
+            "    `"$core/sender/InputInjector.cpp`"",
+            "    `"$core/sender/InputInjector.h`"",
+            "    `"$core/sender/ScreenCapture.h`"",
+            "    `"$core/sender/ScreenCaptureWin.h`"",
+            "    `"$core/sender/VideoEncoderFF.h`"",
             ')',
             "target_include_directories(liquidDX11 PRIVATE `"$spike`" `"$core`")",
+            'target_compile_definitions(liquidDX11 PRIVATE ENABLE_SENDER=1)',
+            'find_package(FFMPEG REQUIRED)',
+            'target_include_directories(liquidDX11 PRIVATE ${FFMPEG_INCLUDE_DIRS})',
+            'target_link_directories(liquidDX11 PRIVATE ${FFMPEG_LIBRARY_DIRS})',
             'target_link_libraries(liquidDX11 PRIVATE',
-            '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGLWidgets)'
+            '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGLWidgets',
+            '    ${FFMPEG_LIBRARIES}',
+            '    d3d11 dxgi setupapi user32 winmm ws2_32)'
           ) -join "`n"
           Add-Content 'liquid-bc/CMakeLists.txt' $block -Encoding utf8
           Write-Host "appended BetterCast core from $core"
@@ -164,7 +205,9 @@ jobs:
       - name: Build the BetterCast glass spike
         shell: pwsh
         run: |
-          cmake -S liquid-bc -B build-spike -A x64 -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
+          cmake -S liquid-bc -B build-spike -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
           cmake --build build-spike --config Release
 
           $out = Get-ChildItem -Path build-spike -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
