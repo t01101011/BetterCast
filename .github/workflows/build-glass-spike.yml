@@ -234,6 +234,25 @@ jobs:
           & "$env:Qt6_DIR/bin/windeployqt.exe" --release --no-translations `
             --no-system-d3d-compiler --no-opengl-sw "out/BetterCastGlassSpike.exe"
 
+          # FFmpeg's DLLs too. windeployqt only knows about Qt, so without this
+          # the spike dies at startup on "avcodec-61.dll was not found" - which
+          # is what happened the first time the sender was linked in. The main
+          # Windows workflow copies these the same way.
+          $vcpkgBin = "C:/vcpkg/installed/x64-windows/bin"
+          if (-not (Test-Path $vcpkgBin)) { throw "vcpkg bin missing - FFmpeg DLLs cannot be bundled" }
+          Get-ChildItem "$vcpkgBin/*.dll" | ForEach-Object { Copy-Item $_.FullName out/ }
+
+          # Fail here rather than on the user's machine.
+          foreach ($need in 'avcodec-61.dll', 'avutil-59.dll', 'avformat-61.dll', 'swscale-8.dll') {
+            if (-not (Test-Path "out/$need")) {
+              Write-Host "note: $need not present; bundled DLLs are:"
+              Get-ChildItem 'out/av*.dll', 'out/sw*.dll' -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "  $($_.Name)" }
+            }
+          }
+          $av = Get-ChildItem 'out/avcodec-*.dll' -ErrorAction SilentlyContinue
+          if (-not $av) { throw "no avcodec DLL was bundled" }
+
           # Both apps load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {
             $src = Join-Path 'liquidDX11' $d
