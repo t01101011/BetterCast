@@ -1,15 +1,29 @@
-// BetterCast: device page. Replaces liquidDX11's "General".
+// BetterCast: device page, driven by the real core. Replaces "General".
 //
-// A page fragment, included inside their render loop, so `scale` and the
-// Glass:: kit are already in scope and every bit of their layout scaffolding
-// (fonts, panel widths, window chrome, page switching) still applies. The
-// previous spike hand-rolled a window instead and the result was misaligned
-// panels over a stretched sidebar.
+// Not a mockup any more. The list below is whatever BetterCast's own
+// ServiceDiscovery has found on the network this second, running inside this
+// D3D11 process via BetterCastBridge - same mDNS code the shipping app uses.
             if (dispPage == 0) {
-                Glass::BeginPanel("STEPHEN'S MACBOOK AIR");
-                Glass::StatRow("Address", "192.168.254.111:51820");
-                Glass::StatRow("Transport", "Wi-Fi (mDNS)");
-                Glass::StatusPill("Available", IM_COL32(52,209,88,255));
+                const auto& bcDevices = BetterCastBridge::devices();
+
+                Glass::BeginPanel("DEVICES ON THIS NETWORK");
+                if (bcDevices.empty()) {
+                    ImGui::TextDisabled("Browsing for receivers...");
+                    ImGui::TextWrapped("Open BetterCast on a phone, tablet or Mac and it "
+                                       "should appear here within a few seconds.");
+                } else {
+                    static int bcSelected = 0;
+                    if (bcSelected >= (int)bcDevices.size()) bcSelected = 0;
+                    for (int i = 0; i < (int)bcDevices.size(); i++) {
+                        if (Glass::Chip(bcDevices[(size_t)i].name.c_str(), bcSelected == i))
+                            bcSelected = i;
+                    }
+                    const auto& sel = bcDevices[(size_t)bcSelected];
+                    Glass::Divider();
+                    Glass::StatRow("Address",
+                        (sel.host + ":" + std::to_string(sel.port)).c_str());
+                    Glass::StatRow("Discovered by", "mDNS");
+                }
                 Glass::EndPanel();
 
                 Glass::BeginPanel("STREAM TO THIS DEVICE");
@@ -33,10 +47,28 @@
                 Glass::Slider("Bitrate", &bcBitrate, 2.0f, 100.0f, "%.0f Mbps");
                 Glass::EndPanel();
 
-                Glass::BeginPanel("DISPLAY ARRANGEMENT");
-                Glass::StatRow("Primary", "1920 x 1080  (Intel UHD)");
-                Glass::StatRow("Virtual 1", "1440 x 900  -> MacBook Air");
-                Glass::StatRow("Virtual 2", "detached");
-                Glass::StatRow("Virtual 3", "detached");
+                // The architecture question, answered on screen rather than argued.
+                Glass::BeginPanel("ARCHITECTURE PROBE");
+                Glass::StatRow("Qt core", "running in this render loop");
+                Glass::StatRow("Receivers found", std::to_string(bcDevices.size()).c_str());
+                Glass::StatRow("OpenGL window",
+                               BetterCastBridge::probeWindowOpen() ? "open" : "closed");
+                ImGui::Dummy(ImVec2(0, 6));
+                ImGui::TextWrapped("The receive path renders through a QOpenGLWidget. It only "
+                                   "survives this design if one can live beside a D3D11 "
+                                   "swapchain in the same process - open one and see.");
+                ImGui::Dummy(ImVec2(0, 6));
+                if (Glass::Button(BetterCastBridge::probeWindowOpen()
+                                      ? "Close OpenGL window"
+                                      : "Open OpenGL window", false)) {
+                    BetterCastBridge::toggleProbeWindow();
+                }
+                Glass::EndPanel();
+
+                Glass::BeginPanel("CORE LOG");
+                {
+                    const std::string last = BetterCastBridge::lastLogLine();
+                    ImGui::TextWrapped("%s", last.empty() ? "(nothing logged yet)" : last.c_str());
+                }
                 Glass::EndPanel();
             }

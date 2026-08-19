@@ -1,14 +1,22 @@
 name: Build Glass Spike (liquidDX11)
 
-# Spike, not product. Builds StephenLovino/liquidDX11 unmodified so the glass
-# material can be judged running on real hardware, and so the toolchain is
-# proven before any BetterCast UI is written against it.
+# Spike, not product. Two executables:
 #
-# Deliberately step one of two. Writing a D3D11 + ImGui page against an API
-# that has never been compiled here would be guessing twice at once; this
-# proves the build, and the BetterCast page follows on a known-good base.
+#   liquidDX11.exe          - the reference, unmodified, for comparison
+#   BetterCastGlassSpike.exe - BetterCast's pages in that shell, driving the
+#                              real Qt core in-process
 #
-# Delete this file and the spike is gone - it touches nothing in BetterCast.
+# The second one exists to answer the architecture question rather than argue
+# it: whether BetterCast's own ServiceDiscovery, and an OpenGL widget like the
+# one the receive path renders through, survive inside a D3D11 render loop.
+#
+# Overlay rather than reimplement. liquidDX11's layout lives in its main.cpp -
+# fonts at set sizes, a scale factor threaded through every width, panel
+# sizing, chrome, page switching - and a hand-written window reproduced none of
+# it. So its tree is copied and only the page bodies, nav labels and three
+# anchored lines of main.cpp are changed. Every patch asserts it applied.
+#
+# Delete spike/ and this file and none of it remains.
 
 on:
   workflow_dispatch:
@@ -16,11 +24,14 @@ on:
     branches: [fix/windows-sender-latency-topology]
     paths:
       - '.github/workflows/build-glass-spike.yml'
-      - 'spike/glass-ui/**'
+      - 'spike/**'
 
 concurrency:
   group: glass-spike-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  QT_VERSION: '6.7.0'
 
 jobs:
   build-spike:
@@ -33,10 +44,19 @@ jobs:
           repository: StephenLovino/liquidDX11
           path: liquidDX11
 
-      - name: Check out BetterCast (for the spike sources)
+      - name: Check out BetterCast
         uses: actions/checkout@v4
         with:
           path: bettercast
+
+      - name: Install Qt 6
+        shell: pwsh
+        run: |
+          pip install aqtinstall
+          python -m aqt install-qt windows desktop ${{ env.QT_VERSION }} win64_msvc2019_64 `
+            --outputdir C:/Qt
+          echo "Qt6_DIR=C:/Qt/${{ env.QT_VERSION }}/msvc2019_64" >> $env:GITHUB_ENV
+          echo "C:/Qt/${{ env.QT_VERSION }}/msvc2019_64/bin" >> $env:GITHUB_PATH
 
       - name: Build liquidDX11 unmodified
         shell: pwsh
@@ -44,33 +64,95 @@ jobs:
           cmake -S liquidDX11 -B build-ref -A x64
           cmake --build build-ref --config Release
 
-      # Overlay rather than reimplement. A hand-written window reproduced none
-      # of their layout scaffolding - fonts at set sizes, the scale factor,
-      # panel widths, window chrome, page switching - and rendered as
-      # misaligned panels over a stretched sidebar. Copying their tree and
-      # swapping only the page bodies keeps all of it.
-      - name: Overlay BetterCast pages onto a copy of liquidDX11
+      - name: Overlay BetterCast onto a copy of liquidDX11
         shell: pwsh
         run: |
           Copy-Item -Recurse liquidDX11 liquid-bc
+
           $pages = 'liquid-bc/examples/example_win32_directx11/src/app/pages'
           Copy-Item bettercast/spike/glass-ui/pages/*.inc $pages -Force
-          Write-Host "overlaid: $((Get-ChildItem bettercast/spike/glass-ui/pages/*.inc).Name -join ', ')"
+          Write-Host "overlaid pages: $((Get-ChildItem bettercast/spike/glass-ui/pages/*.inc).Name -join ', ')"
 
-          # Nav labels live in main.cpp; without these the sidebar still reads
-          # General / Display / Battery over BetterCast content.
           $main = 'liquid-bc/examples/example_win32_directx11/src/main.cpp'
           $t = Get-Content $main -Raw
+
+          # Nav labels, or the sidebar still reads General / Display / Battery.
           $t = $t.Replace(
             'const char* navLabels[] = { "General", "Display", "Battery", "Storage", "Customize" };',
             'const char* navLabels[] = { "Devices", "Hotspot", "Send", "Receive", "Material" };')
           $t = $t.Replace(
             'const char* pages[8] = { "General","Display","Battery","Storage","Customize","View Profile","Account Settings","Apps" };',
             'const char* pages[8] = { "Devices","Hotspot","Send","Receive","Material","View Profile","Account Settings","Apps" };')
-          Set-Content $main $t -Encoding utf8
-          if ($t -notmatch 'Devices') { throw "nav label replacement did not apply" }
+          if ($t -notmatch 'Devices') { throw "nav label patch did not apply" }
 
-          cmake -S liquid-bc -B build-spike -A x64
+          # 1. The bridge header.
+          $before = $t
+          $t = $t.Replace(
+            '#include <vector>',
+            "#include <vector>`n#include `"BetterCastBridge.h`"")
+          if ($t -eq $before) { throw "include patch did not apply" }
+
+          # 2. Name the argv parameters and start the Qt core. The signature is
+          #    int main(int, char**) upstream, so argc/argv are unreachable
+          #    until they are given names.
+          $before = $t
+          $t = $t.Replace(
+            "int main(int, char**)`n{",
+            "int main(int bc_argc, char** bc_argv)`n{`n    BetterCastBridge::init(bc_argc, bc_argv);")
+          if ($t -eq $before) { throw "entry point patch did not apply" }
+
+          # 3. Pump Qt once per frame. Without this nothing Qt-driven ever runs:
+          #    no discovery, no sockets, no timers.
+          $before = $t
+          $t = $t.Replace(
+            '        if (done) break;',
+            "        if (done) break;`n        BetterCastBridge::pump();")
+          if ($t -eq $before) { throw "event pump patch did not apply" }
+
+          Set-Content $main $t -Encoding utf8
+          Write-Host "main.cpp patched: bridge include, entry point, event pump"
+
+      - name: Add the BetterCast core to the spike target
+        shell: pwsh
+        run: |
+          # CMake wants forward slashes; [char]92 avoids writing a backslash
+          # literal, which has not survived this repo's tooling reliably.
+          $sep   = [char]92
+          $ws    = (Get-Location).Path.Replace($sep, '/')
+          $spike = "$ws/bettercast/spike/glass-app"
+          $core  = "$ws/bettercast/Sources/BetterCastReceiverDesktop"
+
+          # An array joined with newlines, not a here-string: a PowerShell
+          # here-string terminator has to sit at column 0, and inside a YAML
+          # block scalar a column-0 line ends the block and breaks the file.
+          #
+          # Appended rather than merged: liquidDX11 builds one executable from
+          # its own main.cpp, and this adds the Qt core to that same target.
+          # AUTOMOC is a target property because CMAKE_AUTOMOC only applies to
+          # targets declared after it, and this runs long after add_executable.
+          $block = @(
+            '',
+            '# ---- BetterCast bridge (spike only) ----',
+            'find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Network OpenGLWidgets)',
+            'set_target_properties(liquidDX11 PROPERTIES AUTOMOC ON)',
+            'target_sources(liquidDX11 PRIVATE',
+            "    `"$spike/BetterCastBridge.cpp`"",
+            "    `"$spike/BetterCastBridge.h`"",
+            "    `"$core/ServiceDiscovery.cpp`"",
+            "    `"$core/ServiceDiscovery.h`"",
+            "    `"$core/LogManager.h`"",
+            ')',
+            "target_include_directories(liquidDX11 PRIVATE `"$spike`" `"$core`")",
+            'target_link_libraries(liquidDX11 PRIVATE',
+            '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGLWidgets)'
+          ) -join "`n"
+          Add-Content 'liquid-bc/CMakeLists.txt' $block -Encoding utf8
+          Write-Host "appended BetterCast core from $core"
+
+      - name: Build the BetterCast glass spike
+        shell: pwsh
+        run: |
+          cmake -S liquid-bc -B build-spike -A x64 -DCMAKE_PREFIX_PATH="$env:Qt6_DIR"
           cmake --build build-spike --config Release
 
           $out = Get-ChildItem -Path build-spike -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
@@ -81,6 +163,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
+
           $ref = Get-ChildItem -Path build-ref -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
           if (-not $ref) { throw "the reference build produced no exe" }
           Copy-Item $ref.FullName out/
@@ -91,7 +174,12 @@ jobs:
           Copy-Item $bc.FullName out/
           Write-Host "built: BetterCastGlassSpike.exe  $([math]::Round($bc.Length/1MB,1)) MB"
 
-          # Both load fonts from beside the binary.
+          # Qt runtime beside the binary, or the spike will not start on a
+          # machine without Qt on PATH - which is every machine but the runner.
+          & "$env:Qt6_DIR/bin/windeployqt.exe" --release --no-translations `
+            --no-system-d3d-compiler --no-opengl-sw "out/BetterCastGlassSpike.exe"
+
+          # Both apps load fonts from beside the binary.
           foreach ($d in 'data', 'misc/fonts') {
             $src = Join-Path 'liquidDX11' $d
             if (Test-Path $src) { Copy-Item -Recurse $src out/ -ErrorAction SilentlyContinue }
