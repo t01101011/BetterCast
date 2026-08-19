@@ -162,6 +162,13 @@ QString targetKey(const DISPLAYCONFIG_PATH_INFO& p) {
 
 // Known VDD installation paths (static fallbacks)
 static const QStringList kVddPathsBase = {
+    // Where BetterCast's own installer puts it. Only the app directory was
+    // checked before, which works when the app is the installed one and fails
+    // for anything else running on the same machine - a build in Downloads
+    // found no path at all, so the settings write failed and every virtual
+    // display stayed at the driver's 800x600.
+    "C:/Program Files/BetterCast/VirtualDisplayDriver",
+    "C:/Program Files (x86)/BetterCast/VirtualDisplayDriver",
     "C:/VirtualDisplayDriver",
     "C:/Program Files/Virtual Display Driver",
     "C:/Program Files/VirtualDisplayDriver",

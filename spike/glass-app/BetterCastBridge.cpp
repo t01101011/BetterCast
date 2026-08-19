@@ -76,11 +76,38 @@ char** g_argv = nullptr;
 void refreshDevices() {
     g_devices.clear();
     if (!g_discovery) return;
-    for (const auto& s : g_discovery->discoveredServices()) {
+
+    const auto& found = g_discovery->discoveredServices();
+
+    // Names Apple advertises twice: a Wi-Fi service and an AWDL "<name> P2P"
+    // one. macOS hides the P2P copy when the base device is present; without
+    // that both appear and the P2P one is the broken half.
+    auto hasBase = [&found](const QString& p2pName) {
+        const QString base = p2pName.left(p2pName.length() - 4);   // strip " P2P"
+        for (const auto& o : found) {
+            if (o.name == base) return true;
+        }
+        return false;
+    };
+
+    for (const auto& s : found) {
+        if (s.name.endsWith(" P2P") && hasBase(s.name)) continue;
+
+        // An AWDL target is a .local hostname on a link Windows has no route
+        // to, so it never resolves - "Host not found" is the whole story of
+        // the iPhone failing to connect. Skip anything that is not an address
+        // we can actually dial.
+        const QHostAddress addr(s.host);
+        if (addr.isNull()) continue;
+
         Device d;
         d.name = s.name.toStdString();
         d.host = s.host.toStdString();
-        d.port = s.port;
+        // Every BetterCast receiver listens on 51820. mDNS may advertise the
+        // P2P listener's dynamic port instead, which is unreachable from here.
+        // MainWindow has forced this for the Qt app all along; the bridge was
+        // reading the raw SRV record and dialling 57510.
+        d.port = 51820;
         g_devices.push_back(std::move(d));
     }
 }
