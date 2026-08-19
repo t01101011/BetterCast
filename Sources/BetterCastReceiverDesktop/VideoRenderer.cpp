@@ -1,5 +1,5 @@
 #include "VideoRenderer.h"
-#include "MainWindow.h"  // for LogManager
+#include "LogManager.h"
 #include <QDebug>
 
 extern "C" {

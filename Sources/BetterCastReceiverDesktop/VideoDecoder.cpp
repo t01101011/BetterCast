@@ -1,5 +1,5 @@
 #include "VideoDecoder.h"
-#include "MainWindow.h"  // for LogManager
+#include "LogManager.h"
 #include <QDebug>
 #include <QtEndian>
 

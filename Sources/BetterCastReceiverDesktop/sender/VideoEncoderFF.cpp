@@ -1,5 +1,5 @@
 #include "VideoEncoderFF.h"
-#include "../MainWindow.h"  // LogManager
+#include "../LogManager.h"
 #include <QDebug>
 #include <QElapsedTimer>
 #include <algorithm>

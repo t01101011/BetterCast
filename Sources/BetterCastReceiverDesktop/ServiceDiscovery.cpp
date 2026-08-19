@@ -1,5 +1,5 @@
 #include "ServiceDiscovery.h"
-#include "MainWindow.h"  // for LogManager
+#include "LogManager.h"
 #include <QDebug>
 #include <QNetworkInterface>
 #include <QHostInfo>

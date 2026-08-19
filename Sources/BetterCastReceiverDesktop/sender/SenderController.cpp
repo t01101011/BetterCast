@@ -2,7 +2,7 @@
 #include "VirtualDisplayVDD.h"
 #include "VideoEncoderFF.h"
 #include "NetworkSender.h"
-#include "../MainWindow.h"  // LogManager
+#include "../LogManager.h"
 #include <QDebug>
 
 #ifdef _WIN32

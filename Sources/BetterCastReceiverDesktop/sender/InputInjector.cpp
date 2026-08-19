@@ -1,7 +1,7 @@
 #include "InputInjector.h"
 #include "../InputEvent.h"
 #include "../KeyCodeMap.h"
-#include "../MainWindow.h"  // LogManager
+#include "../LogManager.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>

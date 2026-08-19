@@ -1,5 +1,5 @@
 #include "VirtualDisplayVDD.h"
-#include "../MainWindow.h"  // LogManager
+#include "../LogManager.h"
 
 #include <QDebug>
 #include <QCoreApplication>

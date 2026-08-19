@@ -112,6 +112,7 @@ set(SOURCES
 
 set(HEADERS
     MainWindow.h
+    LogManager.h
     Language.h
     UpdateChecker.h
     Theme.h

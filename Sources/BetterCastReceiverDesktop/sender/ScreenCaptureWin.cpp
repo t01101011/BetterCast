@@ -1,5 +1,5 @@
 #include "ScreenCaptureWin.h"
-#include "../MainWindow.h"  // LogManager
+#include "../LogManager.h"
 
 #include <d3d11.h>
 #include <dxgi1_2.h>

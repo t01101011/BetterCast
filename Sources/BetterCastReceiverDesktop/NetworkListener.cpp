@@ -1,5 +1,5 @@
 #include "NetworkListener.h"
-#include "MainWindow.h"  // for LogManager
+#include "LogManager.h"
 #include "VideoDecoder.h"
 #include "VideoRenderer.h"
 #include "AudioDecoder.h"
