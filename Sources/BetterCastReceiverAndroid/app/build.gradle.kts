@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -12,8 +14,28 @@ android {
         applicationId = "com.bettercast.receiver"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.3"
+    }
+
+    // Release signing. Credentials come from keystore.properties (gitignored) or,
+    // failing that, environment variables — never from this file.
+    val keystorePropsFile = rootProject.file("keystore.properties")
+    val keystoreProps = Properties().apply {
+        if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { stream -> load(stream) }
+    }
+    val storePath = keystoreProps.getProperty("storeFile") ?: System.getenv("BC_KEYSTORE")
+    val hasSigning = storePath != null && file(storePath).exists()
+
+    signingConfigs {
+        if (hasSigning) {
+            create("release") {
+                storeFile = file(storePath!!)
+                storePassword = keystoreProps.getProperty("storePassword") ?: System.getenv("BC_KEYSTORE_PASSWORD")
+                keyAlias = keystoreProps.getProperty("keyAlias") ?: System.getenv("BC_KEY_ALIAS") ?: "bettercast"
+                keyPassword = keystoreProps.getProperty("keyPassword") ?: System.getenv("BC_KEY_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -23,6 +45,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasSigning) signingConfig = signingConfigs.getByName("release")
         }
     }
 
@@ -37,6 +60,8 @@ android {
 
     buildFeatures {
         compose = true
+        // Settings shows the version/build, read from BuildConfig.
+        buildConfig = true
     }
 
     composeOptions {
@@ -57,6 +82,18 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    // Pulled in transitively by material3, but named here because the receiver's
+    // settings menu depends on it directly.
+    implementation("androidx.compose.material:material-icons-core")
+    // The extended set covers the glyphs the UI actually needs (Usb, Wifi, QrCode,
+    // Cast...) which the core set does not. It is large, but R8 strips the unused
+    // vectors — worth checking the release APK size if minification is ever turned off.
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // QR encoding for hotspot credentials — the Mac reads this with its camera,
+    // because startLocalOnlyHotspot generates the SSID/passphrase and regenerates
+    // them each start, so they can only travel phone -> Mac.
+    implementation("com.google.zxing:core:3.5.3")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")

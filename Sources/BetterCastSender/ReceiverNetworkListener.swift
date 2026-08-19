@@ -93,7 +93,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
         isConnectingADB = true
 
         DispatchQueue.main.async {
-            self.status = "Setting up ADB tunnel..."
+            self.status = tr("Setting up ADB tunnel...")
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -107,7 +107,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
 
             guard let adb = adbPath else {
                 DispatchQueue.main.async {
-                    self?.status = "ADB not found. Install Android SDK or add adb to PATH."
+                    self?.status = tr("ADB not found. Install Android SDK or add adb to PATH.")
                 }
                 self?.isConnectingADB = false
                 return
@@ -150,13 +150,13 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
                 } else {
                     self?.isConnectingADB = false
                     DispatchQueue.main.async {
-                        self?.status = "ADB forward failed: \(output.trimmingCharacters(in: .whitespacesAndNewlines))"
+                        self?.status = tr("ADB forward failed: %@", output.trimmingCharacters(in: .whitespacesAndNewlines))
                     }
                 }
             } catch {
                 self?.isConnectingADB = false
                 DispatchQueue.main.async {
-                    self?.status = "Failed to run ADB: \(error.localizedDescription)"
+                    self?.status = tr("Failed to run ADB: %@", error.localizedDescription)
                 }
             }
         }
@@ -175,15 +175,22 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
             process.waitUntilExit()
 
             let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let lines = output.components(separatedBy: "\n")
-                .filter { $0.contains("\tdevice") }
-                .map { $0.components(separatedBy: "\t").first ?? "" }
-                .filter { !$0.isEmpty }
-
-            if lines.count <= 1 { return nil }
-
-            let usbDevices = lines.filter { !$0.contains(":") }
-            return usbDevices.first ?? lines.first
+            // Parse every attached transport, in any state. adb demands -s whenever MORE
+            // THAN ONE transport is attached — including offline/unauthorized ones — so
+            // counting only state "device" used to skip -s and fail with
+            // "more than one device/emulator".
+            let rows = output.components(separatedBy: "\n").dropFirst()
+                .map { $0.components(separatedBy: "\t") }
+                .filter { $0.count >= 2 && !$0[0].isEmpty }
+            let ready = rows.filter { $0[1].trimmingCharacters(in: .whitespaces) == "device" }
+                .map { $0[0] }
+            // Prefer a physical USB device over emulators and wireless transports.
+            let physical = ready.filter { !$0.hasPrefix("emulator-") && !$0.contains(":") }
+            let chosen = physical.first ?? ready.first
+            if let chosen = chosen, ready.count > 1 || rows.count > 1 {
+                LogManager.shared.log("Receiver: Multiple ADB transports attached — using \(chosen)")
+            }
+            return chosen
         } catch {
             return nil
         }
@@ -241,7 +248,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
             if connectOutput.contains("connected") || connectOutput.contains("already") {
                 LogManager.shared.log("Receiver: Wireless ADB enabled (\(deviceIp):5555)")
                 DispatchQueue.main.async {
-                    self.status = "ADB connected (wireless enabled)"
+                    self.status = tr("ADB connected (wireless enabled)")
                 }
             }
         } catch {
@@ -252,6 +259,18 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
     // MARK: - TCP/UDP
 
     func connectTo(host: String, port: UInt16) {
+        // Guard: connecting to our own listening port on loopback is a self-connection —
+        // the receiver dials its own listener and shows a black screen forever. The Manual
+        // Connect field defaults to localhost:51820, which is exactly this trap.
+        let loopbackNames: Set<String> = ["localhost", "127.0.0.1", "::1"]
+        if loopbackNames.contains(host), let ownPort = tcpListener?.port?.rawValue, port == ownPort {
+            LogManager.shared.log("Receiver: Refusing to connect to our own listener (localhost:\(port))")
+            DispatchQueue.main.async {
+                self.status = tr("That is this Mac's own port. For Android USB use Connect via ADB; otherwise enter the sender's IP.")
+            }
+            return
+        }
+
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.enableKeepalive = true
         tcpOptions.noDelay = true
@@ -263,7 +282,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
 
         LogManager.shared.log("Receiver: Connecting to \(host):\(port)...")
         DispatchQueue.main.async {
-            self.status = "Connecting to \(host):\(port)..."
+            self.status = tr("Connecting to %@:%@...", host, String(port))
         }
 
         handleNewConnection(connection, type: .tcp)
@@ -373,12 +392,12 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
                     portStr = ""
                 }
                 if type == "TCP" {
-                    self.status = "Ready\(portStr). Advertising as _bettercast._tcp"
+                    self.status = tr("Ready%@. Advertising as _bettercast._tcp", portStr)
                 }
                 LogManager.shared.log("Receiver (\(type)): Ready\(portStr)")
             case .failed(let error):
                 if type == "TCP" {
-                    self.status = "Failed: \(error.localizedDescription)"
+                    self.status = tr("Failed: %@", error.localizedDescription)
                     LogManager.shared.log("Receiver (TCP): Failed — \(error). Check if port 51820 is in use or if macOS firewall is blocking incoming connections.")
                 } else {
                     LogManager.shared.log("Receiver (\(type)): Failed \(error)")
@@ -603,7 +622,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
         stopReconnectTimer()
         LogManager.shared.log("Receiver: Connection lost. Will auto-reconnect via ADB...")
         DispatchQueue.main.async {
-            self.status = "Reconnecting via ADB..."
+            self.status = tr("Reconnecting via ADB...")
         }
 
         reconnectTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
@@ -626,14 +645,14 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
             isReconnecting = false
             LogManager.shared.log("Receiver: ADB auto-reconnect failed after \(Self.maxReconnectAttempts) attempts")
             DispatchQueue.main.async {
-                self.status = "Reconnect failed. Tap 'Connect via ADB' to retry."
+                self.status = tr("Reconnect failed. Tap 'Connect via ADB' to retry.")
             }
             return
         }
 
         LogManager.shared.log("Receiver: ADB reconnect attempt \(reconnectAttempts)/\(Self.maxReconnectAttempts)")
         DispatchQueue.main.async {
-            self.status = "Reconnecting via ADB (\(self.reconnectAttempts)/\(Self.maxReconnectAttempts))..."
+            self.status = tr("Reconnecting via ADB (%lld/%lld)...", self.reconnectAttempts, Self.maxReconnectAttempts)
         }
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -698,6 +717,10 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
 
     /// Detects when video frames stop arriving while clients are connected,
     /// and requests a keyframe to recover (e.g. after Android encoder restart).
+    /// Consecutive watchdog ticks with no decoded frame. Bounds both how often the
+    /// decoder is torn down and how loudly the failure is logged.
+    private var staleRecoveryAttempts = 0
+
     private func startStaleFrameWatchdog() {
         staleFrameTimer?.invalidate()
         staleFrameTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: true) { [weak self] _ in
@@ -705,12 +728,31 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
             let neverGotFrames = (self.lastDecodedFrameTime == .distantPast)
             let staleDuration = Date().timeIntervalSince(self.lastDecodedFrameTime)
 
-            if neverGotFrames || staleDuration > 3.0 {
-                if !neverGotFrames {
-                    LogManager.shared.log("Receiver: No frames for \(Int(staleDuration))s — requesting keyframe")
-                    self.videoRenderer?.flushForFormatChange()
-                    self.videoDecoder?.reset()
-                }
+            guard neverGotFrames || staleDuration > 3.0 else {
+                self.staleRecoveryAttempts = 0
+                return
+            }
+
+            self.staleRecoveryAttempts += 1
+
+            // Resetting the decoder is only worth doing while the keyframe we asked for
+            // could still plausibly be in flight. Doing it on every 3s tick destroyed the
+            // very frame it was waiting for: a full IDR over a congested link routinely
+            // takes longer than the window, so the recovery loop kept demolishing its own
+            // recovery and the stream could never come back.
+            if !neverGotFrames && self.staleRecoveryAttempts <= 2 {
+                LogManager.shared.log("Receiver: No frames for \(Int(staleDuration))s — resetting decoder and requesting keyframe")
+                self.videoRenderer?.flushForFormatChange()
+                self.videoDecoder?.reset()
+            }
+
+            // Keep asking, but stop shouting. This used to log and re-request every three
+            // seconds indefinitely — 265 seconds of it in one report — which buried the
+            // real failure in noise and told the user nothing.
+            if self.staleRecoveryAttempts <= 3 {
+                self.sendInputEvent(InputEvent(type: .command, keyCode: 999))
+            } else if self.staleRecoveryAttempts % 10 == 0 {
+                LogManager.shared.log("Receiver: Still no video after \(Int(staleDuration))s — the sender has stopped sending frames")
                 self.sendInputEvent(InputEvent(type: .command, keyCode: 999))
             }
         }
@@ -720,6 +762,7 @@ class ReceiverNetworkListener: ObservableObject, ReceiverVideoDecoderDelegate {
 
     func didDecode(sampleBuffer: CMSampleBuffer) {
         lastDecodedFrameTime = Date()
+        staleRecoveryAttempts = 0
         if isReconnecting {
             isReconnecting = false
             reconnectAttempts = 0
