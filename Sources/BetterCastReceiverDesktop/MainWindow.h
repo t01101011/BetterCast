@@ -159,6 +159,7 @@ private:
     QSplitter* m_splitter = nullptr;
     QListWidget* m_sidebarList = nullptr;
     QStackedWidget* m_stack = nullptr;
+    QLineEdit*      m_deviceFilter = nullptr;   // top-bar device search
 
 #ifdef _WIN32
     GlassBackdrop* m_backdrop      = nullptr;

@@ -139,5 +139,17 @@
         <source>Stream to this device</source>
         <translation>I-stream sa device na ito</translation>
     </message>
+    <message>
+        <source>Search devices</source>
+        <translation>Maghanap ng device</translation>
+    </message>
+    <message>
+        <source>Rescan for devices</source>
+        <translation>Maghanap muli ng device</translation>
+    </message>
+    <message>
+        <source>Open the BetterCast donation page on Whop</source>
+        <translation>Buksan ang donation page ng BetterCast sa Whop</translation>
+    </message>
 </context>
 </TS>

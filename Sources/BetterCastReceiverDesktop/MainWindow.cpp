@@ -6,6 +6,7 @@
 #endif
 #include <QDesktopServices>
 #include <QPoint>
+#include <functional>
 #ifdef _WIN32
 #include "HotspotManager.h"
 #include "QrImage.h"
@@ -449,46 +450,92 @@ void MainWindow::setupUi() {
                 [this](Qt::ColorScheme) { applyTheme(); });
     }
 
-    m_splitter = new QSplitter(Qt::Horizontal, this);
-    setCentralWidget(m_splitter);
+    // Layout after StephenLovino/liquidDX11: a floating top bar, a sidebar
+    // slab, a content slab and a bottom dock, each an inset rounded surface
+    // over the backdrop rather than panes butted against the window edge.
+    //
+    // The gaps are the design. An edge-to-edge splitter reads as a settings
+    // dialog no matter how the panels inside it are styled; the same panels
+    // floating with a margin read as one composed surface.
+    auto* shell = new QWidget();
+    auto* shellLayout = new QVBoxLayout(shell);
+    shellLayout->setContentsMargins(12, 12, 12, 12);
+    shellLayout->setSpacing(10);
+    setCentralWidget(shell);
 
-    // Sidebar, with a footer pinned beneath it (macOS uses safeAreaInset for
-    // the same effect).
+    // ── Top bar ──────────────────────────────────────────────────────────
+    auto* topBar = new QWidget();
+    topBar->setObjectName("topBar");
+    topBar->setFixedHeight(52);
+    auto* topLayout = new QHBoxLayout(topBar);
+    topLayout->setContentsMargins(14, 0, 10, 0);
+    topLayout->setSpacing(10);
+
+    auto* mark = new QLabel();
+    mark->setPixmap(Icons::appIcon().pixmap(22, 22));
+    topLayout->addWidget(mark);
+
+    auto* wordmark = new QLabel("BetterCast");
+    wordmark->setStyleSheet("font-size: 14px; font-weight: 600; background: transparent;");
+    topLayout->addWidget(wordmark);
+    topLayout->addSpacing(6);
+
+    m_deviceFilter = new QLineEdit();
+    m_deviceFilter->setPlaceholderText(tr("Search devices"));
+    m_deviceFilter->setClearButtonEnabled(true);
+    m_deviceFilter->setFixedWidth(220);
+    connect(m_deviceFilter, &QLineEdit::textChanged, this, [this](const QString&) {
+        rebuildSidebar();
+    });
+    topLayout->addWidget(m_deviceFilter);
+
+    topLayout->addStretch();
+
+    // Quick actions, as round icon buttons the way liquidDX11 puts them in its
+    // header. Tooltips carry the meaning, since an icon alone rarely does.
+    auto addTopAction = [this, topLayout](const QString& glyph, const QString& tip,
+                                          std::function<void()> onClick) {
+        auto* b = new QPushButton();
+        b->setObjectName("iconButton");
+        b->setIcon(Icons::icon(glyph));
+        b->setIconSize(QSize(16, 16));
+        b->setFixedSize(34, 34);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setToolTip(tip);
+        connect(b, &QPushButton::clicked, this, onClick);
+        topLayout->addWidget(b);
+        return b;
+    };
+    addTopAction(Icons::refresh(), tr("Rescan for devices"), [this]() {
+        if (m_discovery) {
+            m_discovery->stopBrowsing();
+            m_discovery->startBrowsing();
+            LogManager::instance().log("Discovery: rescanning for receivers");
+        }
+    });
+#ifdef _WIN32
+    addTopAction(Icons::wifi(), tr("Wi-Fi Hotspot"), [this]() { selectSidebarItem(m_pageHotspot); });
+#endif
+    addTopAction(Icons::settings(), tr("Settings"), [this]() { selectSidebarItem(m_pageSettings); });
+
+    shellLayout->addWidget(topBar);
+
+    // ── Middle row: sidebar slab + content slab ──────────────────────────
+    m_splitter = new QSplitter(Qt::Horizontal);
+    m_splitter->setHandleWidth(10);
+    m_splitter->setChildrenCollapsible(false);
+
     m_sidebarList = new QListWidget();
     m_sidebarList->setFocusPolicy(Qt::NoFocus);
     m_sidebarList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
 
     auto* sidebarPanel = new QWidget();
+    sidebarPanel->setObjectName("sidebarSlab");
     sidebarPanel->setFixedWidth(230);
     auto* sidebarLayout = new QVBoxLayout(sidebarPanel);
-    sidebarLayout->setContentsMargins(0, 0, 0, 0);
+    sidebarLayout->setContentsMargins(6, 6, 6, 6);
     sidebarLayout->setSpacing(0);
     sidebarLayout->addWidget(m_sidebarList, 1);
-
-    auto* footer = new QWidget();
-    auto* footerLayout = new QVBoxLayout(footer);
-    footerLayout->setContentsMargins(16, 10, 16, 12);
-    footerLayout->setSpacing(6);
-
-    auto* donateBtn = new QPushButton("  Support BetterCast");
-    donateBtn->setIcon(Icons::icon(Icons::heart(), QColor("#e0568a")));
-    donateBtn->setCursor(Qt::PointingHandCursor);
-    donateBtn->setToolTip("Open the BetterCast donation page on Whop");
-    donateBtn->setStyleSheet(
-        "QPushButton { background: transparent; border: 1px solid palette(mid); "
-        "border-radius: 999px; padding: 7px 10px; font-size: 12px; }"
-        "QPushButton:hover { background: rgba(224, 86, 138, 0.12); }");
-    connect(donateBtn, &QPushButton::clicked, this, []() {
-        QDesktopServices::openUrl(QUrl("https://whop.com/bettercast/bettercast-donate/"));
-    });
-    footerLayout->addWidget(donateBtn);
-
-    auto* madeWith = new QLabel(QString::fromUtf8("Made with \xE2\x99\xA5 by Stephen Lovino"));
-    madeWith->setAlignment(Qt::AlignCenter);
-    madeWith->setStyleSheet("font-size: 11px; color: palette(mid);");
-    footerLayout->addWidget(madeWith);
-
-    sidebarLayout->addWidget(footer);
 
     // Detail stack
     m_stack = new QStackedWidget();
@@ -541,13 +588,76 @@ void MainWindow::setupUi() {
     // Build sidebar
     setupSidebar();
 
-    // Assemble splitter
+    // Content lives in its own slab so it floats like the sidebar rather than
+    // running to the window edge.
+    auto* contentSlab = new QWidget();
+    contentSlab->setObjectName("contentSlab");
+    auto* contentLayout = new QVBoxLayout(contentSlab);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->addWidget(m_stack);
+
     m_splitter->addWidget(sidebarPanel);
-    m_splitter->addWidget(m_stack);
+    m_splitter->addWidget(contentSlab);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
     m_splitter->setCollapsible(0, false);
     m_splitter->setCollapsible(1, false);
+    shellLayout->addWidget(m_splitter, 1);
+
+    // ── Bottom dock ──────────────────────────────────────────────────────
+    //
+    // liquidDX11 puts an account chip at the left and a row of round icons at
+    // the right. The equivalents here are the support link, which used to be
+    // buried under the sidebar, and the actions worth reaching from any page.
+    auto* dock = new QWidget();
+    dock->setObjectName("dockBar");
+    dock->setFixedHeight(56);
+    auto* dockLayout = new QHBoxLayout(dock);
+    dockLayout->setContentsMargins(12, 0, 12, 0);
+    dockLayout->setSpacing(10);
+
+    auto* donateBtn = new QPushButton("  Support BetterCast");
+    donateBtn->setIcon(Icons::icon(Icons::heart(), QColor("#e0568a")));
+    donateBtn->setCursor(Qt::PointingHandCursor);
+    donateBtn->setToolTip(tr("Open the BetterCast donation page on Whop"));
+    donateBtn->setStyleSheet(
+        "QPushButton { background: transparent; border: 1px solid palette(mid); "
+        "border-radius: 999px; padding: 7px 14px; font-size: 12px; }"
+        "QPushButton:hover { background: rgba(224, 86, 138, 0.12); }");
+    connect(donateBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://whop.com/bettercast/bettercast-donate/"));
+    });
+    dockLayout->addWidget(donateBtn);
+
+    auto* madeWith = new QLabel(QString::fromUtf8("Made with \xE2\x99\xA5 by Stephen Lovino"));
+    madeWith->setStyleSheet("font-size: 11px; color: palette(mid); background: transparent;");
+    dockLayout->addWidget(madeWith);
+
+    dockLayout->addStretch();
+
+    auto addDockAction = [this, dockLayout](const QString& glyph, const QString& tip,
+                                            std::function<void()> onClick) {
+        auto* b = new QPushButton();
+        b->setObjectName("dockButton");
+        b->setIcon(Icons::icon(glyph));
+        b->setIconSize(QSize(18, 18));
+        b->setFixedSize(40, 40);
+        b->setCursor(Qt::PointingHandCursor);
+        b->setToolTip(tip);
+        connect(b, &QPushButton::clicked, this, onClick);
+        dockLayout->addWidget(b);
+    };
+    addDockAction(Icons::overview(), tr("Overview"), [this]() { selectSidebarItem(m_pageOverview); });
+#ifdef ENABLE_SENDER
+    addDockAction(Icons::send(), tr("Send Screen"), [this]() { selectSidebarItem(m_pageSend); });
+#endif
+    addDockAction(Icons::receive(), tr("Receive Screen"), [this]() { selectSidebarItem(m_pageReceive); });
+#ifdef _WIN32
+    addDockAction(Icons::wifi(), tr("Wi-Fi Hotspot"), [this]() { selectSidebarItem(m_pageHotspot); });
+#endif
+    addDockAction(Icons::logs(), tr("Logs"), [this]() { selectSidebarItem(m_pageLogs); });
+
+    shellLayout->addWidget(dock);
 
     // Connect sidebar selection
     connect(m_sidebarList, &QListWidget::currentRowChanged,
@@ -598,7 +708,15 @@ void MainWindow::rebuildSidebar() {
         searching->setSizeHint(QSize(0, 30));
         m_sidebarList->addItem(searching);
     } else {
+        const QString filter = m_deviceFilter ? m_deviceFilter->text().trimmed() : QString();
         for (const auto& dev : m_devices) {
+            // Match the address too: on a busy network the name is often the
+            // least memorable thing about a device.
+            if (!filter.isEmpty() &&
+                !dev.name.contains(filter, Qt::CaseInsensitive) &&
+                !dev.host.contains(filter, Qt::CaseInsensitive)) {
+                continue;
+            }
             auto* item = new QListWidgetItem(dev.name);
             item->setIcon(Icons::icon(Icons::forDeviceName(dev.name),
                                       dev.connected ? QColor("#4caf50") : QColor("#c8c8c8")));

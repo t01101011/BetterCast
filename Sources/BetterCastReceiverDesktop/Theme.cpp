@@ -139,6 +139,28 @@ QString stylesheet(const Palette& p) {
 
     /* Label/value rows, separated by a hairline rather than boxed. The last
        row in a panel drops its rule so the panel does not end on a line. */
+    /* The floating slabs: top bar, sidebar, content and dock. Each is an
+       inset rounded surface over the backdrop rather than a pane butted
+       against the window edge - the gaps between them are the design. */
+    QWidget#topBar, QWidget#dockBar, QWidget#sidebarSlab, QWidget#contentSlab {
+        background-color: %SURFACE_GLASS%;
+        border: 1px solid %BORDER%;
+        border-radius: %CARD_RADIUS%;
+    }
+
+    /* Round icon buttons, in the header and along the dock. */
+    QPushButton#iconButton, QPushButton#dockButton {
+        background-color: transparent;
+        border: none;
+        border-radius: 999px;
+    }
+    QPushButton#iconButton:hover, QPushButton#dockButton:hover {
+        background-color: %SURFACE_HOVER%;
+    }
+    QPushButton#dockButton:pressed, QPushButton#iconButton:pressed {
+        background-color: %SELECTION%;
+    }
+
     QWidget#statRow {
         border-bottom: 1px solid %BORDER%;
         background: transparent;
