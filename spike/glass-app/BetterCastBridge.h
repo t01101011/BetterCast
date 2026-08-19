@@ -37,9 +37,21 @@ struct Device {
 // Creates the QApplication and starts mDNS browsing. Safe to call once.
 bool init(int argc, char** argv);
 
-// Run Qt's event loop for this frame. Must be called from the render loop or
-// nothing Qt-driven ever fires: no discovery, no sockets, no timers.
+// Run Qt's event loop for this frame, and throttle the frame rate when the
+// window is not in front.
+//
+// Must be called from the render loop or nothing Qt-driven ever fires: no
+// discovery, no sockets, no timers.
+//
+// The throttle is here rather than at another patch site because this is
+// already called once per frame. liquidDX11 redraws continuously, which is
+// right for a showcase and wrong for a utility that sits open all day - it
+// measured around 50% of an integrated GPU doing nothing. A backgrounded
+// window has nobody looking at it, so it does not need 60fps.
 void pump();
+
+// Frames per second the throttle is currently allowing, for the UI to show.
+int currentFrameCap();
 
 void shutdown();
 

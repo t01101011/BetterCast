@@ -53,6 +53,15 @@
                 Glass::StatRow("Receivers found", std::to_string(bcDevices.size()).c_str());
                 Glass::StatRow("OpenGL window",
                                BetterCastBridge::probeWindowOpen() ? "open" : "closed");
+                {
+                    // Click another window and watch this drop: a utility that
+                    // sits open all day should not redraw at 60fps with nobody
+                    // looking at it, and idle GPU was the last real objection.
+                    const std::string cap =
+                        std::to_string(BetterCastBridge::currentFrameCap()) + " fps"
+                        + (BetterCastBridge::currentFrameCap() < 60 ? "  (background)" : "");
+                    Glass::StatRow("Frame cap", cap.c_str());
+                }
                 ImGui::Dummy(ImVec2(0, 6));
                 ImGui::TextWrapped("The receive path renders through a QOpenGLWidget. It only "
                                    "survives this design if one can live beside a D3D11 "

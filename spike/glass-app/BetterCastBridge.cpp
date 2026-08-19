@@ -10,6 +10,13 @@
 
 #include <memory>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <Windows.h>
+#endif
+
 namespace BetterCastBridge {
 namespace {
 
@@ -19,6 +26,7 @@ std::unique_ptr<QOpenGLWidget>    g_probe;
 
 std::vector<Device> g_devices;
 std::string         g_lastLog;
+int                 g_frameCap = 60;
 
 // argv has to outlive QApplication: it keeps the pointer, and Qt reads it
 // again during shutdown. A local array in init() would be long gone by then.
@@ -67,9 +75,33 @@ bool init(int argc, char** argv) {
 
 void pump() {
     if (!g_app) return;
+
     // Bounded rather than open-ended: an unbounded processEvents can service
     // work faster than it arrives and stall the frame it was called from.
     QCoreApplication::processEvents(QEventLoop::AllEvents, 4 /* ms */);
+
+#ifdef _WIN32
+    // Throttle when nobody is looking.
+    //
+    // GetActiveWindow() is this thread's active window and GetForegroundWindow()
+    // is the system's; equal means we are the window in front. Comparing them
+    // avoids having to thread the HWND through from a patched main().
+    //
+    // Sleeping here rather than skipping the frame keeps the loop structure
+    // upstream untouched, and Qt has already been serviced above so discovery
+    // and sockets stay responsive at any frame rate.
+    const HWND active = GetActiveWindow();
+    const bool foreground = active != nullptr && active == GetForegroundWindow();
+
+    g_frameCap = foreground ? 60 : 15;
+    if (!foreground) {
+        Sleep(50);
+    }
+#endif
+}
+
+int currentFrameCap() {
+    return g_frameCap;
 }
 
 void shutdown() {
