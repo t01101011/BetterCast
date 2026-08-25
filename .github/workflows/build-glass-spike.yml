@@ -512,13 +512,43 @@ jobs:
       - name: Install NSIS
         shell: pwsh
         run: |
-          $nsisVersion = '3.10'
-          Invoke-WebRequest "https://github.com/nicehash/NSIS/releases/download/v$nsisVersion/nsis-$nsisVersion.zip" `
-            -OutFile 'nsis.zip'
-          Expand-Archive 'nsis.zip' -DestinationPath 'C:/nsis' -Force
-          $nsisDir = Get-ChildItem 'C:/nsis' -Directory | Select-Object -First 1
-          if ($nsisDir) { echo "$($nsisDir.FullName)" >> $env:GITHUB_PATH }
-          else          { echo 'C:/nsis' >> $env:GITHUB_PATH }
+          # Neither of the obvious approaches works any more, and this step has
+          # now failed both ways:
+          #
+          #   - Downloading it from the nicehash/NSIS mirror, which is what this
+          #     step used to do. That release 404s today, which is what broke
+          #     the first installer build.
+          #   - Asserting the runner ships it. build-windows-receiver.yml does
+          #     that and is failing on main for the same reason: windows-latest
+          #     has moved past the image that had NSIS preinstalled.
+          #
+          # So: use it if the image happens to have it, and install it from
+          # Chocolatey - which is preinstalled on GitHub's Windows runners - if
+          # not. That depends on the runner and the package rather than on a
+          # mirror that can vanish.
+          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          $nsisDir = 'C:\Program Files (x86)\NSIS'
+          if (-not $makensis -and (Test-Path "$nsisDir\makensis.exe")) {
+            $makensis = "$nsisDir\makensis.exe"
+            $nsisDir >> $env:GITHUB_PATH
+          }
+          if (-not $makensis) {
+            Write-Host "NSIS is not on this runner image - installing it"
+            choco install nsis --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install nsis failed with $LASTEXITCODE" }
+            if (-not (Test-Path "$nsisDir\makensis.exe")) {
+              throw "choco reported success but makensis.exe is not in $nsisDir"
+            }
+            $makensis = "$nsisDir\makensis.exe"
+            $nsisDir >> $env:GITHUB_PATH
+          }
+
+          # Assert it runs, not merely that a file exists - the whole reason
+          # this step is being rewritten is an assertion that checked the
+          # wrong thing.
+          & $makensis /VERSION
+          if ($LASTEXITCODE -ne 0) { throw "makensis is present at $makensis but would not run" }
+          Write-Host "makensis: $makensis"
 
       - name: Build the installer
         shell: pwsh
