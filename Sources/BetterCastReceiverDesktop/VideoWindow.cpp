@@ -1,7 +1,11 @@
 #include "VideoWindow.h"
 #include "VideoRenderer.h"
 #include "InputHandler.h"
-#include "MainWindow.h"  // for LogManager
+// LogManager.h, not MainWindow.h. LogManager was lifted out of MainWindow so
+// that pieces like this one could be linked by a front end that has no
+// QMainWindow-based UI at all; including MainWindow.h here pulled the whole
+// thing back in and undid that for anyone reusing this window.
+#include "LogManager.h"
 
 #include <QDebug>
 

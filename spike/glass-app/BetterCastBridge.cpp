@@ -2,6 +2,8 @@
 
 #include "AudioDecoder.h"
 #include "AudioPlayer.h"
+#include "InputHandler.h"
+#include "VideoWindow.h"
 #include "LogManager.h"
 #include "NetworkListener.h"
 #include "ServiceDiscovery.h"
@@ -70,9 +72,14 @@ std::unique_ptr<ServiceDiscovery> g_discovery;
 std::unique_ptr<QOpenGLWidget>    g_probe;
 std::unique_ptr<NetworkListener>  g_network;
 std::unique_ptr<VideoDecoder>     g_decoder;
-std::unique_ptr<VideoRenderer>    g_renderer;   // parentless: its own window
+std::unique_ptr<VideoRenderer>    g_renderer;   // owned by g_videoWindow once built
+std::unique_ptr<VideoWindow>      g_videoWindow;
+std::unique_ptr<InputHandler>     g_input;
 std::unique_ptr<AudioDecoder>     g_audioDecoder;
 std::unique_ptr<AudioPlayer>      g_audioPlayer;
+// Something is sending us a screen right now. The event pump has to keep up
+// with it, which it will not do on the idle cadence.
+bool                              g_receiving = false;
 std::unique_ptr<UpdateChecker>    g_updates;
 std::string g_updateStatus;
 std::string g_updateUrl;
@@ -378,8 +385,6 @@ bool init(int argc, char** argv) {
     // this bridge quietly dropped.
     g_decoder  = std::make_unique<VideoDecoder>();
     g_renderer = std::make_unique<VideoRenderer>();
-    g_renderer->setWindowTitle("BetterCast - Receiving");
-    g_renderer->resize(1280, 720);
 
     // Sound as well as picture. The macOS sender encodes system audio as AAC
     // and sends it down the same socket tagged 0x02; without a decoder wired
@@ -412,24 +417,42 @@ bool init(int argc, char** argv) {
                              "Glass: first decoded frame handed to the video window");
                      });
 
-    // Size the window to the stream rather than leaving it at the default,
-    // which letterboxes a 1080p desktop into 1280x720 on first connect.
-    QObject::connect(g_decoder.get(), &VideoDecoder::dimensionsChanged,
-                     g_renderer.get(), [](int w, int h) {
-                         if (w <= 0 || h <= 0 || !g_renderer) return;
-                         LogManager::instance().log(
-                             QString("Glass: video window sized to %1x%2").arg(w).arg(h));
-                         // Halved when it would not fit on this desktop: a 4K
-                         // Mac mirrored onto a 1080p PC opened a window larger
-                         // than the screen.
-                         int tw = w, th = h;
-                         while (tw > 2560 || th > 1440) { tw /= 2; th /= 2; }
-                         g_renderer->resize(tw, th);
-                     });
-
     g_network = std::make_unique<NetworkListener>();
     g_network->setup(g_decoder.get(), g_renderer.get(), g_audioDecoder.get());
     g_network->start();
+
+    // The real receive window, not a bare renderer in a frame.
+    //
+    // VideoWindow is what the Qt app shows, and it carries the three things
+    // that were missing: F11 and double-click for fullscreen, Escape to leave
+    // it, and a toolbar. Showing the VideoRenderer widget directly gave a
+    // window that could only ever display picture.
+    g_input = std::make_unique<InputHandler>();
+    g_input->attach(g_renderer.get());
+
+    // And this is why clicks and typing did nothing: the renderer collects
+    // them, but they only reach the other machine if the handler's events are
+    // connected to the socket. Without it BetterCast is a viewer rather than a
+    // second screen you can work on.
+    QObject::connect(g_input.get(), &InputHandler::inputEvent,
+                     g_network.get(), &NetworkListener::sendInputEvent);
+    QObject::connect(g_decoder.get(), &VideoDecoder::dimensionsChanged,
+                     g_input.get(), [](int w, int h) {
+                         // Pointer positions are sent in the stream's
+                         // coordinates, so the handler has to know them or
+                         // every click lands somewhere else.
+                         if (w > 0 && h > 0) g_input->setContentSize(QSize(w, h));
+                     });
+
+    g_videoWindow = std::make_unique<VideoWindow>(g_renderer.get(), g_input.get());
+    g_videoWindow->setWindowTitle("BetterCast - Receiving");
+    QObject::connect(g_decoder.get(), &VideoDecoder::dimensionsChanged,
+                     g_videoWindow.get(), [](int w, int h) {
+                         if (w <= 0 || h <= 0 || !g_videoWindow) return;
+                         LogManager::instance().log(
+                             QString("Glass: video window sized to %1x%2").arg(w).arg(h));
+                         g_videoWindow->resizeToFitVideo(w, h);
+                     });
 
     const uint16_t port = g_network->actualTcpPort();
     g_discovery->startAdvertising(port);
@@ -438,9 +461,19 @@ bool init(int argc, char** argv) {
     // Show the video window only while something is actually sending, the way
     // the Qt app opens and closes it on connect.
     QObject::connect(g_network.get(), &NetworkListener::connectionEstablished,
-                     []() { if (g_renderer) g_renderer->show(); requestRedraw(); });
+                     []() {
+                         g_receiving = true;
+                         // showForVideo, not show: it also raises and focuses,
+                         // which is what makes the keyboard reach the sender.
+                         if (g_videoWindow) g_videoWindow->showForVideo();
+                         requestRedraw();
+                     });
     QObject::connect(g_network.get(), &NetworkListener::connectionLost,
-                     []() { if (g_renderer) g_renderer->hide(); requestRedraw(); });
+                     []() {
+                         g_receiving = false;
+                         if (g_videoWindow) g_videoWindow->close();
+                         requestRedraw();
+                     });
     QObject::connect(g_network.get(), &NetworkListener::statusChanged,
                      [](const QString& m) { LogManager::instance().log(m); });
 
@@ -528,14 +561,21 @@ bool shouldRender() {
 
     // Sleep so the caller can skip without spinning.
     //
-    // Much shorter while streaming: the sleep sets how often pump() runs, and
-    // pump() is what moves captured frames to the encoder and the socket. At
-    // 16ms an idle-looking window still throttles a live stream to 60 drains a
-    // second; at 4ms it drains 250 times, which is comfortably ahead of three
-    // receivers at 60fps. Idle with nothing streaming keeps the long sleep,
-    // since that is where the GPU saving comes from.
-    const bool streaming = sessionCount() > 0;
-    Sleep(streaming ? 4 : 16);
+    // Much shorter while a stream is live in either direction: the sleep sets
+    // how often pump() runs, and pump() is what moves frames between the
+    // sockets, the codecs and the video window. At 16ms an idle-looking window
+    // throttles a live stream to 60 drains a second; at 2ms it drains 500
+    // times, comfortably ahead of anything either side sends.
+    //
+    // Receiving counts, and it did not. sessionCount() is senders only, so
+    // watching a Mac's screen ran on the idle cadence - and worse, focusing
+    // the video window makes this one background, which is the slowest branch
+    // of all. The picture stayed smooth because whole frames still arrived;
+    // the cursor did not, because a queue drained 60 times a second is 16ms
+    // behind before anything else happens. Idle with nothing streaming keeps
+    // the long sleep, since that is where the GPU saving comes from.
+    const bool busy = sessionCount() > 0 || g_receiving;
+    Sleep(busy ? 2 : 16);
     return false;
 #else
     return true;
@@ -576,6 +616,12 @@ void shutdown() {
         g_discovery.reset();
     }
     g_network.reset();          // before the decoders it feeds
+    // The window before the renderer it borrows. VideoWindow puts the renderer
+    // in its layout and detaches it again in its destructor, deliberately, so
+    // that whoever really owns it can still free it - but only if the window
+    // goes first. The other order frees a widget that is still someone's child.
+    g_videoWindow.reset();
+    g_input.reset();
     g_renderer.reset();
     g_decoder.reset();
     g_audioPlayer.reset();
