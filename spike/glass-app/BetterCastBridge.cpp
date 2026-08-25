@@ -390,6 +390,43 @@ bool init(int argc, char** argv) {
     QObject::connect(g_audioDecoder.get(), &AudioDecoder::pcmDecoded,
                      g_audioPlayer.get(), &AudioPlayer::onPcmDecoded);
 
+    // Decoded frames to the window that draws them.
+    //
+    // NetworkListener::setup() takes a renderer but only stores the pointer -
+    // it never uses it, and this connection is what actually carries picture.
+    // MainWindow makes it; the bridge did not, so every frame was decoded
+    // correctly and emitted to nobody. Handing setup() the renderer looked
+    // like wiring and was not.
+    QObject::connect(g_decoder.get(), &VideoDecoder::frameDecoded,
+                     g_renderer.get(), &VideoRenderer::onFrameDecoded);
+
+    // Said once, so a log can tell "decoding but not drawing" from "not
+    // decoding" without guessing. Those two look identical from outside and
+    // cost several rounds to tell apart.
+    QObject::connect(g_decoder.get(), &VideoDecoder::frameDecoded,
+                     g_renderer.get(), [](AVFrame*) {
+                         static bool said = false;
+                         if (said) return;
+                         said = true;
+                         LogManager::instance().log(
+                             "Glass: first decoded frame handed to the video window");
+                     });
+
+    // Size the window to the stream rather than leaving it at the default,
+    // which letterboxes a 1080p desktop into 1280x720 on first connect.
+    QObject::connect(g_decoder.get(), &VideoDecoder::dimensionsChanged,
+                     g_renderer.get(), [](int w, int h) {
+                         if (w <= 0 || h <= 0 || !g_renderer) return;
+                         LogManager::instance().log(
+                             QString("Glass: video window sized to %1x%2").arg(w).arg(h));
+                         // Halved when it would not fit on this desktop: a 4K
+                         // Mac mirrored onto a 1080p PC opened a window larger
+                         // than the screen.
+                         int tw = w, th = h;
+                         while (tw > 2560 || th > 1440) { tw /= 2; th /= 2; }
+                         g_renderer->resize(tw, th);
+                     });
+
     g_network = std::make_unique<NetworkListener>();
     g_network->setup(g_decoder.get(), g_renderer.get(), g_audioDecoder.get());
     g_network->start();
