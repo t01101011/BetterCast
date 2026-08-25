@@ -26,6 +26,11 @@ on:
     paths:
       - '.github/workflows/build-glass-spike.yml'
       - 'spike/**'
+      # The core too. This app compiles the same capture, encode, discovery and
+      # decode sources as the Qt one, so a change there changes this binary -
+      # but the filter listed only spike/, and a fix to NetworkListener.cpp
+      # rebuilt the Qt app while this one kept shipping the old code.
+      - 'Sources/BetterCastReceiverDesktop/**'
 
 concurrency:
   group: glass-spike-${{ github.ref }}
