@@ -104,17 +104,17 @@
                             BetterCastBridge::stopSending(target.host);
                         }
                     } else {
-                        ImGui::TextWrapped("Send shows this device the screen in front of "
+                        ImGui::TextWrapped("Mirror shows this device the screen in front of "
                                            "you. Extend gives it a display of its own, so "
                                            "your desktop grows onto it.");
                         ImGui::Dummy(ImVec2(0, 8));
 
-                        // Windows can duplicate a display only once, so Send is
-                        // offered to one device at a time. Saying so up front
+                        // Windows can duplicate a display only once, so Mirror
+                        // is offered to one device at a time. Saying so up front
                         // beats a button that fails when pressed.
                         const bool mirrored = BetterCastBridge::isMirroring();
                         if (!mirrored) {
-                            if (Glass::Button("Send Screen Here", false)) {
+                            if (Glass::Button("Mirror Screen Here", false)) {
                                 BetterCastBridge::startMirroring(
                                     target.host, target.port,
                                     (int)bcFps, (int)bcBitrate);
@@ -152,7 +152,7 @@
                     const std::string note =
                         "Kept for " + bcDevices[(size_t)bcSelected].name +
                         " and used the next time a stream starts. Resolution applies to "
-                        "Extend; Send is whatever size your screen already is.";
+                        "Extend; Mirror is whatever size your screen already is.";
                     ImGui::TextWrapped("%s", note.c_str());
                 }
                 Glass::EndPanel();
