@@ -38,6 +38,20 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
     const uint8_t* videoData = raw + headerSize;
     int videoLen = data.size() - headerSize;
 
+    // Which codec this is, decided once per stream from the first parameter
+    // set seen. Re-sniffed only while unknown, so a mid-stream slice cannot
+    // flip it.
+    if (m_codec == Codec::Unknown) {
+        const Codec sniffed = sniffCodec(videoData, videoLen);
+        if (sniffed != Codec::Unknown) {
+            m_codec = sniffed;
+            LogManager::instance().log(
+                QString("Decoder: stream is %1")
+                    .arg(m_codec == Codec::Hevc ? "H.265 (HEVC)" : "H.264"));
+        }
+    }
+    const bool hevc = (m_codec == Codec::Hevc);
+
     // Scan for SPS/PPS in AVCC-framed NALUs: [4-byte big-endian length][NALU data]
     int offset = 0;
     int naluCount = 0;
@@ -56,7 +70,10 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
             break;
         }
 
-        uint8_t naluType = videoData[offset + 4] & 0x1F;
+        // HEVC's header is two bytes and puts the type in bits 1-6 of the
+        // first; H.264's is one byte, low 5 bits.
+        const uint8_t hdr = videoData[offset + 4];
+        uint8_t naluType = hevc ? uint8_t((hdr >> 1) & 0x3F) : uint8_t(hdr & 0x1F);
         naluCount++;
 
         if (decodeCallCount <= 3) {
@@ -64,45 +81,167 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
                 .arg(decodeCallCount).arg(naluCount).arg(naluType).arg(naluLen));
         }
 
-        if (naluType == 7) { // SPS
-            m_sps = QByteArray(reinterpret_cast<const char*>(videoData + offset + 4),
-                               static_cast<int>(naluLen));
+        // VPS 32, SPS 33, PPS 34 in HEVC; SPS 7, PPS 8 in H.264.
+        const uint8_t spsType = hevc ? 33 : 7;
+        const uint8_t ppsType = hevc ? 34 : 8;
+        const char* nalu = reinterpret_cast<const char*>(videoData + offset + 4);
+
+        if (hevc && naluType == 32) {
+            m_vps = QByteArray(nalu, static_cast<int>(naluLen));
+            LogManager::instance().log(QString("Decoder: Got VPS (%1 bytes)").arg(naluLen));
+        } else if (naluType == spsType) {
+            m_sps = QByteArray(nalu, static_cast<int>(naluLen));
             LogManager::instance().log(QString("Decoder: Got SPS (%1 bytes)").arg(naluLen));
-        } else if (naluType == 8) { // PPS
-            m_pps = QByteArray(reinterpret_cast<const char*>(videoData + offset + 4),
-                               static_cast<int>(naluLen));
+        } else if (naluType == ppsType) {
+            m_pps = QByteArray(nalu, static_cast<int>(naluLen));
             LogManager::instance().log(QString("Decoder: Got PPS (%1 bytes)").arg(naluLen));
         }
 
         offset += 4 + static_cast<int>(naluLen);
     }
 
-    // Initialize or reinitialize decoder if we have SPS/PPS
-    if (!m_sps.isEmpty() && !m_pps.isEmpty()) {
+    // Initialize or reinitialize decoder once every parameter set is in hand.
+    // HEVC needs three; H.264 has no VPS.
+    const bool haveSets = !m_sps.isEmpty() && !m_pps.isEmpty() && (!hevc || !m_vps.isEmpty());
+    if (haveSets) {
         bool needsInit = !m_codecCtx;
-        // Also reinit if SPS/PPS changed (new stream or resolution change)
-        if (m_codecCtx && (m_sps != m_activeSps || m_pps != m_activePps)) {
-            LogManager::instance().log("Decoder: SPS/PPS changed — reinitializing for new stream");
+        // Also reinit if the sets changed (new stream or resolution change)
+        if (m_codecCtx && (m_sps != m_activeSps || m_pps != m_activePps || m_vps != m_activeVps)) {
+            LogManager::instance().log("Decoder: parameter sets changed — reinitializing for new stream");
             destroyDecoder();
             needsInit = true;
         }
         if (needsInit) {
-            LogManager::instance().log(QString("Decoder: Initializing with SPS(%1) + PPS(%2)")
-                .arg(m_sps.size()).arg(m_pps.size()));
-            if (initDecoder(reinterpret_cast<const uint8_t*>(m_sps.constData()), m_sps.size(),
-                            reinterpret_cast<const uint8_t*>(m_pps.constData()), m_pps.size())) {
+            LogManager::instance().log(
+                QString("Decoder: Initializing %1 with SPS(%2) + PPS(%3)%4")
+                    .arg(hevc ? "H.265" : "H.264").arg(m_sps.size()).arg(m_pps.size())
+                    .arg(hevc ? QString(" + VPS(%1)").arg(m_vps.size()) : QString()));
+            const bool ok = hevc
+                ? initHevcDecoder()
+                : initDecoder(reinterpret_cast<const uint8_t*>(m_sps.constData()), m_sps.size(),
+                              reinterpret_cast<const uint8_t*>(m_pps.constData()), m_pps.size());
+            if (ok) {
                 m_activeSps = m_sps;
                 m_activePps = m_pps;
+                m_activeVps = m_vps;
             }
         }
     }
 
     if (m_codecCtx) {
-        decodeNalus(videoData, videoLen);
+        if (hevc) {
+            // FFmpeg reads the HEVC parameter sets below as Annex B, which
+            // puts its parser in Annex B mode - so the packets have to match.
+            // Rewriting the four-byte lengths into start codes is cheaper than
+            // building an hvcC record and getting its profile fields wrong.
+            m_annexB.clear();
+            m_annexB.reserve(videoLen + 16);
+            int p = 0;
+            while (p + 4 <= videoLen) {
+                const uint32_t n = qFromBigEndian<uint32_t>(videoData + p);
+                if (n == 0 || static_cast<qint64>(p) + 4 + n > videoLen) break;
+                m_annexB.append("\x00\x00\x00\x01", 4);
+                m_annexB.append(reinterpret_cast<const char*>(videoData + p + 4),
+                                static_cast<int>(n));
+                p += 4 + static_cast<int>(n);
+            }
+            if (!m_annexB.isEmpty()) {
+                decodeNalus(reinterpret_cast<const uint8_t*>(m_annexB.constData()),
+                            m_annexB.size());
+            }
+        } else {
+            decodeNalus(videoData, videoLen);
+        }
     } else if (decodeCallCount <= 10) {
         LogManager::instance().log(QString("Decoder: frame %1 — no codec context yet (waiting for SPS/PPS)")
             .arg(decodeCallCount));
     }
+}
+
+VideoDecoder::Codec VideoDecoder::sniffCodec(const uint8_t* videoData, int videoLen) {
+    // Walk the AVCC NALUs and look for a parameter set that only one of the
+    // two codecs could have produced.
+    int offset = 0;
+    while (offset + 5 <= videoLen) {
+        const uint32_t naluLen = qFromBigEndian<uint32_t>(videoData + offset);
+        if (naluLen == 0 ||
+            static_cast<qint64>(offset) + 4 + naluLen > static_cast<qint64>(videoLen)) {
+            break;
+        }
+        const uint8_t hdr = videoData[offset + 4];
+
+        // HEVC: VPS 32, SPS 33, PPS 34. A VPS is decisive - H.264 has no such
+        // thing, and reading one as H.264 gives type 0, which is undefined.
+        const uint8_t hevcType = (hdr >> 1) & 0x3F;
+        if (hevcType >= 32 && hevcType <= 34) return Codec::Hevc;
+
+        // H.264: SPS 7, PPS 8, and the top bit is the forbidden zero bit.
+        const uint8_t h264Type = hdr & 0x1F;
+        if ((hdr & 0x80) == 0 && (h264Type == 7 || h264Type == 8)) return Codec::H264;
+
+        offset += 4 + static_cast<int>(naluLen);
+    }
+    return Codec::Unknown;
+}
+
+void VideoDecoder::appendAnnexB(QByteArray& out, const QByteArray& nalu) const {
+    if (nalu.isEmpty()) return;
+    out.append("\x00\x00\x00\x01", 4);
+    out.append(nalu);
+}
+
+bool VideoDecoder::initHevcDecoder() {
+    // Extradata as Annex B rather than hvcC. FFmpeg accepts either - it treats
+    // extradata starting with 1 as hvcC and anything else as Annex B - and
+    // Annex B avoids hand-building a configuration record whose profile, tier
+    // and level fields would have to be parsed back out of the SPS to be
+    // right. The packets are converted to match in decode().
+    QByteArray extra;
+    appendAnnexB(extra, m_vps);
+    appendAnnexB(extra, m_sps);
+    appendAnnexB(extra, m_pps);
+    if (extra.isEmpty()) return false;
+
+    const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_HEVC);
+    if (!codec) {
+        LogManager::instance().log("Decoder: no H.265 decoder in this FFmpeg build");
+        return false;
+    }
+
+    if (m_codecCtx) destroyDecoder();
+
+    m_codecCtx = avcodec_alloc_context3(codec);
+    if (!m_codecCtx) return false;
+
+    uint8_t* extradata = static_cast<uint8_t*>(
+        av_malloc(extra.size() + AV_INPUT_BUFFER_PADDING_SIZE));
+    if (!extradata) {
+        avcodec_free_context(&m_codecCtx);
+        return false;
+    }
+    memcpy(extradata, extra.constData(), extra.size());
+    memset(extradata + extra.size(), 0, AV_INPUT_BUFFER_PADDING_SIZE);
+    m_codecCtx->extradata = extradata;
+    m_codecCtx->extradata_size = extra.size();
+
+    // Same latency and resilience choices as the H.264 path.
+    m_codecCtx->flags |= AV_CODEC_FLAG_LOW_DELAY;
+    m_codecCtx->flags2 |= AV_CODEC_FLAG2_FAST;
+    m_codecCtx->thread_count = 4;
+    m_codecCtx->thread_type = FF_THREAD_SLICE;
+    m_codecCtx->err_recognition = 0;
+    m_codecCtx->error_concealment = FF_EC_GUESS_MVS | FF_EC_DEBLOCK;
+
+    if (avcodec_open2(m_codecCtx, codec, nullptr) < 0) {
+        LogManager::instance().log("Decoder: failed to open the H.265 decoder");
+        avcodec_free_context(&m_codecCtx);
+        return false;
+    }
+
+    m_frame = av_frame_alloc();
+    m_packet = av_packet_alloc();
+    LogManager::instance().log("Decoder: H.265 decoder initialized");
+    return true;
 }
 
 bool VideoDecoder::initDecoder(const uint8_t* sps, int spsLen, const uint8_t* pps, int ppsLen) {
@@ -185,8 +324,13 @@ void VideoDecoder::reset() {
     destroyDecoder();
     m_sps.clear();
     m_pps.clear();
+    m_vps.clear();
     m_activeSps.clear();
     m_activePps.clear();
+    m_activeVps.clear();
+    m_annexB.clear();
+    // The next sender may be a different one, streaming a different codec.
+    m_codec = Codec::Unknown;
 }
 
 void VideoDecoder::destroyDecoder() {
