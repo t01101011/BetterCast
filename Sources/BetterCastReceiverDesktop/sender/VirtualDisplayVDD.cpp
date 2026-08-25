@@ -1128,6 +1128,35 @@ void VirtualDisplayVDD::restorePrimaryMode() {
 // synthesised 1920x1080@60 is the usual reason a mode change is refused —
 // EnumDisplaySettings lists what the driver will actually accept, so pick from
 // there instead of inventing one.
+#ifdef _WIN32
+// The first x past the right edge of every attached display except this one.
+//
+// Windows treats position and size as one change, and rejects a layout where
+// two displays overlap - DISP_CHANGE_FAILED, with nothing said about why. The
+// virtual displays are laid out while they are all 800x600, so the slots are
+// 800 apart; raising one to 1920 wide makes it run into its neighbour, and the
+// resize is refused. That is the whole story of a stream going out at 800x600
+// on a machine with three virtual displays.
+static LONG freeXBeyondOthers(const std::wstring& exclude) {
+    LONG edge = 0;
+    DISPLAY_DEVICEW dd = {};
+    dd.cb = sizeof(dd);
+    for (DWORD i = 0; EnumDisplayDevicesW(nullptr, i, &dd, 0); i++) {
+        const bool attached = (dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0;
+        if (attached && exclude != dd.DeviceName) {
+            DEVMODEW dm = {};
+            dm.dmSize = sizeof(dm);
+            if (EnumDisplaySettingsW(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+                edge = qMax(edge, dm.dmPosition.x + static_cast<LONG>(dm.dmPelsWidth));
+            }
+        }
+        dd = {};
+        dd.cb = sizeof(dd);
+    }
+    return edge;
+}
+#endif
+
 bool VirtualDisplayVDD::setVirtualDisplayResolution(const QString& deviceName,
                                                     int width, int height) {
 #ifdef _WIN32
@@ -1180,8 +1209,25 @@ bool VirtualDisplayVDD::setVirtualDisplayResolution(const QString& deviceName,
     // the change and committing separately survives that; a short retry covers
     // the rest.
     LONG r = DISP_CHANGE_FAILED;
+    bool relocated = false;
     for (int attempt = 0; attempt < 3; attempt++) {
         if (attempt > 0) QThread::msleep(900);
+
+        // Keep the position on the first try - a display already sitting
+        // somewhere sensible should stay there. After that, move it clear of
+        // everything else first: at its new size it may no longer fit the gap
+        // it was laid out into, and an overlapping layout is refused outright.
+        if (attempt == 1) {
+            const LONG parkX = freeXBeyondOthers(wname);
+            if (parkX != best.dmPosition.x) {
+                VDD_LOG(QString("VDD: %1 will not fit where it is at %2x%3 — "
+                                "moving it to x=%4 first")
+                            .arg(deviceName).arg(width).arg(height).arg(parkX));
+                best.dmPosition.x = parkX;
+                best.dmPosition.y = 0;
+                relocated = true;
+            }
+        }
 
         r = ChangeDisplaySettingsExW(wname.c_str(), &best, nullptr,
                                      CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
@@ -1198,6 +1244,10 @@ bool VirtualDisplayVDD::setVirtualDisplayResolution(const QString& deviceName,
 
     VDD_LOG(QString("VDD: %1 set to %2x%3 @ %4Hz")
                 .arg(deviceName).arg(width).arg(height).arg(best.dmDisplayFrequency));
+
+    // Lay the row out again now that this one is its final size, so the gaps
+    // match the displays rather than the sizes they happened to boot at.
+    if (relocated) positionVirtualDisplay();
     return true;
 #else
     Q_UNUSED(deviceName); Q_UNUSED(width); Q_UNUSED(height);
