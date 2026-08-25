@@ -93,6 +93,49 @@ jobs:
           cmake -S liquidDX11 -B build-ref -A x64
           cmake --build build-ref --config Release
 
+      - name: Generate app assets
+        shell: pwsh
+        run: |
+          # Before the build, not after, because the icon is compiled into the
+          # executable now rather than read from beside it at startup. Only the
+          # resource table can give Explorer an icon for the exe itself, and
+          # loading a loose file left the window blank whenever that file was
+          # not where it was expected.
+          New-Item -ItemType Directory -Force bc-assets | Out-Null
+          pip install --quiet Pillow
+          python -c "
+          from PIL import Image, ImageDraw
+
+          def rounded(img, size):
+              img = img.convert('RGBA').resize((size, size), Image.LANCZOS)
+              mask = Image.new('L', (size * 4, size * 4), 0)
+              ImageDraw.Draw(mask).rounded_rectangle(
+                  [0, 0, size * 4 - 1, size * 4 - 1], radius=int(size * 4 * 0.22), fill=255)
+              mask = mask.resize((size, size), Image.LANCZOS)
+              out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
+              out.paste(img, (0, 0), mask)
+              return out
+
+          src = Image.open('bettercast/Sources/BetterCastReceiverDesktop/icon_256x256.png')
+          rounded(src, max(src.size)).save(
+              'bc-assets/appicon.ico',
+              sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+
+          # The welcome splash draws this one, and draws it around 130 logical
+          # pixels - several hundred real ones on a scaled display - so it comes
+          # from the 2048px master rather than the 256px icon source.
+          big = Image.open('bettercast/assets/branding/AppIcon.png')
+          rounded(big, 512).save('bc-assets/bettercast-logo.png')
+          "
+          foreach ($need in 'appicon.ico', 'bettercast-logo.png') {
+            if (-not (Test-Path "bc-assets/$need")) { throw "$need was not generated" }
+          }
+
+          # 101 is what BetterCastBridge::kAppIconResourceId loads, and being the
+          # lowest-numbered icon is what makes Windows use it for the file.
+          Set-Content 'bc-assets/bettercast.rc' '101 ICON "appicon.ico"' -Encoding ascii
+          Write-Host "assets generated into bc-assets/"
+
       - name: Overlay BetterCast onto a copy of liquidDX11
         shell: pwsh
         run: |
@@ -306,6 +349,7 @@ jobs:
             'target_sources(liquidDX11 PRIVATE',
             "    `"$spike/BetterCastBridge.cpp`"",
             "    `"$spike/BetterCastBridge.h`"",
+            "    `"$ws/bc-assets/bettercast.rc`"",
             "    `"$core/ServiceDiscovery.cpp`"",
             "    `"$core/ServiceDiscovery.h`"",
             "    `"$core/LogManager.h`"",
@@ -347,7 +391,17 @@ jobs:
             '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets',
             '    Qt6::Multimedia',
             '    ${FFMPEG_LIBRARIES}',
-            '    d3d11 dxgi setupapi user32 winmm ws2_32)'
+            '    d3d11 dxgi setupapi user32 winmm ws2_32)',
+            '',
+            '# No console window. liquidDX11 calls add_executable without WIN32, so it',
+            '# links as a console binary and Windows opens a terminal beside the app -',
+            '# which is where the log used to go, and is now the LOG panel in Settings.',
+            '# The entry point stays main(), so /SUBSYSTEM:WINDOWS needs telling that;',
+            '# without the override it looks for WinMain and the link fails.',
+            'set_target_properties(liquidDX11 PROPERTIES WIN32_EXECUTABLE ON)',
+            'if(MSVC)',
+            '    target_link_options(liquidDX11 PRIVATE "/ENTRY:mainCRTStartup")',
+            'endif()'
           ) -join "`n"
           Add-Content 'liquid-bc/CMakeLists.txt' $block -Encoding utf8
           Write-Host "appended BetterCast core from $core"
@@ -414,39 +468,18 @@ jobs:
           # reports as a crash because it does not look like one.
           if (-not (Test-Path 'out/Qt6Multimedia.dll')) { throw "Qt6Multimedia.dll was not deployed" }
 
-          # App icon, generated the same way build-windows-receiver.yml does so
-          # the taskbar shows the rounded BetterCast mark rather than a default.
-          pip install --quiet Pillow
-          python -c "
-          from PIL import Image, ImageDraw
-          src = Image.open('bettercast/Sources/BetterCastReceiverDesktop/icon_256x256.png').convert('RGBA')
-          size = max(src.size)
-          src = src.resize((size, size), Image.LANCZOS)
-          mask = Image.new('L', (size * 4, size * 4), 0)
-          ImageDraw.Draw(mask).rounded_rectangle([0, 0, size * 4 - 1, size * 4 - 1], radius=int(size * 4 * 0.22), fill=255)
-          mask = mask.resize((size, size), Image.LANCZOS)
-          out = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-          out.paste(src, (0, 0), mask)
-          out.save('out/appicon.ico', sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
-          # Same mark again for the welcome splash, but from the 2048px master
-          # rather than the 256px icon source: the splash draws it around 130
-          # logical pixels, which is several hundred real ones on a scaled
-          # display, and an upscaled icon looks it.
-          big = Image.open('bettercast/assets/branding/AppIcon.png').convert('RGBA')
-          ls = 512
-          big = big.resize((ls, ls), Image.LANCZOS)
-          lmask = Image.new('L', (ls * 4, ls * 4), 0)
-          ImageDraw.Draw(lmask).rounded_rectangle([0, 0, ls * 4 - 1, ls * 4 - 1], radius=int(ls * 4 * 0.22), fill=255)
-          lmask = lmask.resize((ls, ls), Image.LANCZOS)
-          logo = Image.new('RGBA', (ls, ls), (0, 0, 0, 0))
-          logo.paste(big, (0, 0), lmask)
-          logo.save('out/bettercast-logo.png')
-          "
-          if (-not (Test-Path 'out/appicon.ico')) { throw "appicon.ico was not generated" }
-          # The welcome splash draws this. Without it the splash falls back to a
-          # glyph, which is not wrong but is not the logo either - so fail here
-          # rather than ship a build that quietly lost its own mark.
-          if (-not (Test-Path 'out/bettercast-logo.png')) { throw "bettercast-logo.png was not generated" }
+          # Generated before the build, because the icon is compiled in. The
+          # .ico still travels beside the exe: the installer wants it, and
+          # appIconHandle falls back to it if the resource is ever missing.
+          Copy-Item 'bc-assets/appicon.ico' out/
+          Copy-Item 'bc-assets/bettercast-logo.png' out/
+
+          # The welcome splash draws the logo. Without it the splash falls back
+          # to a glyph, which is not wrong but is not the logo either - so fail
+          # here rather than ship a build that quietly lost its own mark.
+          foreach ($need in 'appicon.ico', 'bettercast-logo.png') {
+            if (-not (Test-Path "out/$need")) { throw "$need did not reach the output" }
+          }
 
           # scrcpy and adb, for mirroring an Android phone onto this PC. Not
           # reimplemented: Genymobile's tool already does this well, it is

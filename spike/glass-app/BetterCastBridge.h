@@ -195,6 +195,16 @@ void setUserName(const std::string& name);
 std::string appVersion();          // e.g. "17.0.0"
 std::string logFilePath();
 
+// Recent log lines, oldest first, bounded.
+//
+// The app is a windowed binary, so there is no console behind it any more -
+// this is where the log lives while it runs. The file keeps everything; this
+// keeps enough to watch a stream start and fail without leaving the app.
+const std::vector<std::string>& logLines();
+
+// Opens the log file in whatever the user reads text with.
+void openLogFile();
+
 // Language codes and their names in their own language, for the picker.
 std::vector<std::pair<std::string, std::string>> languages();
 std::string savedLanguage();                       // empty means follow system

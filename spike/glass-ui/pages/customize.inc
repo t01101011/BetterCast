@@ -79,6 +79,36 @@
                 }
                 Glass::EndPanel();
 
+                Glass::BeginPanel("LOG");
+                // BetterCast used to run as a console binary, so this scrolled
+                // past in a terminal beside the window. That terminal is gone -
+                // it was an artifact of how the thing was linked, not a
+                // feature - so the log lives here instead.
+                {
+                    const auto& bcLog = BetterCastBridge::logLines();
+                    ImGui::BeginChild("bclog", ImVec2(0, 240.0f*scale), true,
+                                      ImGuiWindowFlags_HorizontalScrollbar);
+                    if (bcLog.empty()) {
+                        ImGui::TextDisabled("Nothing logged yet.");
+                    } else {
+                        // TextUnformatted, not Text: a log line is data and can
+                        // contain a percent sign.
+                        for (const auto& line : bcLog) ImGui::TextUnformatted(line.c_str());
+                    }
+                    // Follow the tail, but stop following the moment the user
+                    // scrolls up - otherwise reading anything while a stream is
+                    // running is impossible.
+                    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) {
+                        ImGui::SetScrollHereY(1.0f);
+                    }
+                    ImGui::EndChild();
+                }
+                ImGui::Dummy(ImVec2(0, 6));
+                if (Glass::Button("Open Log File", false)) {
+                    BetterCastBridge::openLogFile();
+                }
+                Glass::EndPanel();
+
                 Glass::BeginPanel("DIAGNOSTICS");
                 Glass::StatRow("Log file", BetterCastBridge::logFilePath().c_str());
                 ImGui::TextWrapped("Written as it happens and kept across a crash, so the "

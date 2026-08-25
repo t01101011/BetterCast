@@ -40,6 +40,17 @@
 
 namespace BetterCastBridge {
 
+// Matches IDI_APPICON in the resource script the build generates. Windows
+// shows the lowest-numbered icon resource as the file's icon in Explorer, so
+// this being the only one is deliberate.
+constexpr int kAppIconResourceId = 101;
+
+// How many log lines to keep. The console window that used to carry these is
+// gone - the app is a windowed binary now - so this is the only place they
+// live at runtime, and it wants to be long enough to cover starting a stream
+// and watching it fail.
+constexpr size_t kLogScrollback = 1000;
+
 // Declared up here rather than below the helpers, because the helpers call
 // them: anything inside the anonymous namespace that asks for a frame needs
 // requestRedraw to already be a name.
@@ -63,9 +74,10 @@ std::string g_updateUrl;
 std::unique_ptr<SenderController> g_sender;
 #endif
 
-std::vector<Device> g_devices;
-std::string         g_lastLog;
-int                 g_frameCap = 60;
+std::vector<Device>      g_devices;
+std::string              g_lastLog;
+std::vector<std::string> g_logLines;
+int                      g_frameCap = 60;
 
 #ifdef _WIN32
 POINT    g_lastCursor    = {};
@@ -280,6 +292,16 @@ bool init(int argc, char** argv) {
     QObject::connect(&LogManager::instance(), &LogManager::logAdded,
                      [](const QString& entry) {
                          g_lastLog = entry.toStdString();
+                         g_logLines.push_back(g_lastLog);
+                         // Bounded, because this runs for as long as the app is
+                         // open and a stream logs steadily. Erasing from the
+                         // front of a vector is fine at this rate and keeps the
+                         // lines contiguous for the UI to walk.
+                         if (g_logLines.size() > kLogScrollback) {
+                             g_logLines.erase(g_logLines.begin(),
+                                              g_logLines.begin() +
+                                                  (long)(g_logLines.size() - kLogScrollback));
+                         }
                          requestRedraw();
                      });
 
@@ -543,6 +565,18 @@ std::string logFilePath() {
     return LogManager::instance().logFilePath().toStdString();
 }
 
+const std::vector<std::string>& logLines() {
+    return g_logLines;
+}
+
+void openLogFile() {
+    // fromLocalFile, not a hand-built file:// string: the path has spaces and
+    // a drive letter in it, and QUrl is the thing that knows how to encode
+    // those. Opens in whatever the user reads text with.
+    QDesktopServices::openUrl(
+        QUrl::fromLocalFile(LogManager::instance().logFilePath()));
+}
+
 std::vector<std::pair<std::string, std::string>> languages() {
     std::vector<std::pair<std::string, std::string>> out;
     for (const auto& e : Language::available()) {
@@ -595,14 +629,27 @@ void* appIconHandle() {
     static bool tried = false;
     if (!tried) {
         tried = true;
-        // Beside the executable, as the workflow ships it. LR_LOADFROMFILE
-        // avoids needing a resource script in a project whose build is patched
-        // together rather than owned.
-        const QString path =
-            QFileInfo(QCoreApplication::applicationDirPath() + "/appicon.ico").absoluteFilePath();
-        icon = (HICON)LoadImageW(nullptr, path.toStdWString().c_str(), IMAGE_ICON,
-                                 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
-        if (!icon) LogManager::instance().log("Glass: appicon.ico not found beside the exe");
+
+        // Out of the executable's own resources first. Reading appicon.ico
+        // from beside the exe was the original approach and it left the window
+        // blank whenever the file was not where it was expected - and it can
+        // never give Explorer an icon for the exe itself, because that comes
+        // from the resource table and nowhere else.
+        icon = LoadIconW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(kAppIconResourceId));
+
+        if (!icon) {
+            // Still support the loose file, so a build without the resource
+            // script is not left iconless.
+            const QString path =
+                QFileInfo(QCoreApplication::applicationDirPath() + "/appicon.ico").absoluteFilePath();
+            icon = (HICON)LoadImageW(nullptr, path.toStdWString().c_str(), IMAGE_ICON,
+                                     0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+        }
+        if (!icon) {
+            LogManager::instance().log(
+                "Glass: no app icon - neither the embedded resource nor appicon.ico "
+                "beside the exe could be loaded");
+        }
     }
     return icon;
 #else
