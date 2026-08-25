@@ -287,6 +287,41 @@ jobs:
             '        if (false && !welcomed && appClock > 1.0f) {')
           if ($t -eq $before) { throw "welcome toast patch did not apply" }
 
+          # 11. The header row of round buttons. Apps opens liquidDX11's
+          #     surface gallery, which is its showcase and not a BetterCast
+          #     feature, so it goes. Bolt and the speedometer already land on
+          #     real pages - this device, and the device list - so they stay.
+          $before = $t
+          $appsOld = @(
+            '            ImGui::SameLine(0, 8);',
+            '            if (Glass::IconButton("hdr_apps", Glass::Icon::Grid, 40.0f)) page = 7;'
+          ) -join $lf
+          $t = $t.Replace($appsOld, '')
+          if ($t -eq $before) { throw "apps button patch did not apply" }
+
+          # 12. Every remaining door into the component gallery on page 6 -
+          #     the gear, the context menu and the profile menu - goes to
+          #     Settings instead. It is liquidDX11's widget showcase: date
+          #     pickers, metaballs, a plan chooser, a Sign Out button.
+          $before = $t
+          $t = $t.Replace(
+            'if (Glass::IconButton("hdr_gear", Glass::Icon::Gear, 40.0f)) page = 6;',
+            'if (Glass::IconButton("hdr_gear", Glass::Icon::Gear, 40.0f)) page = 4;')
+          $t = $t.Replace('else if (r == 1) page = 6;', 'else if (r == 1) page = 4;')
+          $t = $t.Replace(
+            "                    case Glass::ProfileAction::AccountSettings:`n                        page = 6; break;",
+            "                    case Glass::ProfileAction::AccountSettings:`n                        page = 4; break;")
+          if ($t -eq $before) { throw "gallery reroute patch did not apply" }
+          if ($t -match 'page = 6;') { throw "something still routes to the component gallery" }
+
+          # 13. And the shortcut that lands on it. 1 to 5 select the five nav
+          #     pages, which is useful; 0 jumping to the gallery is a stray
+          #     keypress away from somewhere the user cannot explain.
+          $before = $t
+          $t = $t.Replace(
+            '            if (ImGui::IsKeyPressed(ImGuiKey_0, false)) page = 7;', '')
+          if ($t -eq $before) { throw "gallery shortcut patch did not apply" }
+
           # 8. The welcome splash. liquidDX11 opens on its own spark and the
           #    macOS-setup greeting - hello, Bonjour, Hola - which is charming
           #    and belongs to someone else. The mark becomes the real BetterCast
