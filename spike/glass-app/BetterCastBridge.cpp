@@ -349,7 +349,19 @@ bool init(int argc, char** argv) {
     QSurfaceFormat fmt;
     fmt.setVersion(2, 1);
     fmt.setProfile(QSurfaceFormat::CompatibilityProfile);
-    fmt.setSwapInterval(1);
+
+    // No vsync on the receive window.
+    //
+    // Waiting for the display's next refresh costs up to a frame of latency by
+    // itself, and worse than that: the swap happens inside processEvents on
+    // the loop that also feeds the decoder and the socket, so a blocking swap
+    // stalls the whole pipeline for the same 16ms the sleep was just lowered
+    // to 2ms to avoid.
+    //
+    // The cost is tearing on a window showing another machine's desktop, where
+    // being current matters more than being seamless. The glass UI is D3D11
+    // and presents through its own path, so this does not touch it.
+    fmt.setSwapInterval(0);
     QSurfaceFormat::setDefaultFormat(fmt);
 
     // QApplication rather than QCoreApplication, so widgets remain available

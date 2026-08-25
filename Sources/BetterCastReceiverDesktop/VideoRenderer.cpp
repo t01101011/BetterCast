@@ -180,6 +180,13 @@ void VideoRenderer::onFrameDecoded(AVFrame* frame) {
             .arg(isVisible()).arg(width()).arg(height()));
     }
 
+    // Nothing to paint into. Every frame past this point is copied plane by
+    // plane - about 3 MB for 1080p - and Stephen's log shows minutes of
+    // visible=0 while a stream ran, all of it spent competing with the decoder
+    // for memory bandwidth on a laptop. The next frame after the window
+    // reappears is at most a frame time away, so nothing is lost by stopping.
+    if (!isVisible()) return;
+
     QMutexLocker lock(&m_frameMutex);
 
     int w = frame->width;
