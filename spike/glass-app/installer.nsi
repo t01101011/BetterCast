@@ -1,4 +1,4 @@
-; BetterCast Glass — Windows installer (NSIS)
+; BetterCast — Windows installer (NSIS)
 ;
 ; Modelled on Sources/BetterCastReceiverDesktop/installer.nsi, which has already
 ; been through the mistakes: devcon adding a device node per run, an uninstaller
@@ -6,17 +6,26 @@
 ; deleted while nodes still referenced them. The VDD handling below is that
 ; script's, kept in step with it deliberately.
 ;
-; Installed alongside the Qt app rather than over it. Its own directory, its own
-; uninstall key, and firewall rules under its own names — uninstalling one must
-; not delete rules the other still needs.
+; Everything the user sees says BetterCast, because that is the name of the app.
+;
+; It installs into the same C:\Program Files\BetterCast as the older Qt build,
+; deliberately: the display driver lives there, the app already looks for it
+; there, and one machine should not carry two copies of a kernel driver. The
+; consequence is that uninstalling removes that folder, and an older Qt build
+; sitting in it goes too.
+;
+; The registry key and the firewall rule names below still carry "Glass". They
+; are never shown as a product name — they exist so that installing or removing
+; this does not overwrite the older build's Add/Remove entry or delete firewall
+; rules it still needs.
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
 ; ─── Configuration ──────────────────────────────────────────────────────────────
 
-!define PRODUCT_NAME "BetterCast Glass"
-!define PRODUCT_EXE "BetterCastGlass.exe"
+!define PRODUCT_NAME "BetterCast"
+!define PRODUCT_EXE "BetterCast.exe"
 !define PRODUCT_PUBLISHER "BetterCast"
 !define PRODUCT_WEB_SITE "https://github.com/StephenLovino/BetterCast"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\${PRODUCT_EXE}"
@@ -28,8 +37,8 @@
 !endif
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "BetterCastGlass-Setup-${PRODUCT_VERSION}.exe"
-InstallDir "$PROGRAMFILES64\BetterCast Glass"
+OutFile "BetterCast-Setup-${PRODUCT_VERSION}.exe"
+InstallDir "$PROGRAMFILES64\BetterCast"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 RequestExecutionLevel admin  ; the display driver needs it
 ShowInstDetails show
@@ -46,7 +55,7 @@ ShowInstDetails show
 !insertmacro MUI_PAGE_INSTFILES
 
 !define MUI_FINISHPAGE_RUN "$INSTDIR\${PRODUCT_EXE}"
-!define MUI_FINISHPAGE_RUN_TEXT "Launch BetterCast Glass"
+!define MUI_FINISHPAGE_RUN_TEXT "Launch BetterCast"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
@@ -56,7 +65,7 @@ ShowInstDetails show
 
 ; ─── Install ────────────────────────────────────────────────────────────────────
 
-Section "BetterCast Glass (required)" SecCore
+Section "BetterCast (required)" SecCore
     SectionIn RO
 
     SetOutPath "$INSTDIR"
@@ -66,9 +75,9 @@ Section "BetterCast Glass (required)" SecCore
     File /r "artifact\*.*"
 
     CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
-    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\BetterCast Glass.lnk" "$INSTDIR\${PRODUCT_EXE}"
+    CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\BetterCast.lnk" "$INSTDIR\${PRODUCT_EXE}"
     CreateShortCut "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-    CreateShortCut "$DESKTOP\BetterCast Glass.lnk" "$INSTDIR\${PRODUCT_EXE}"
+    CreateShortCut "$DESKTOP\BetterCast.lnk" "$INSTDIR\${PRODUCT_EXE}"
 
     WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\${PRODUCT_EXE}"
     WriteRegStr HKLM "${PRODUCT_UNINST_KEY}" "DisplayName" "${PRODUCT_NAME}"
@@ -87,7 +96,8 @@ Section "BetterCast Glass (required)" SecCore
     WriteUninstaller "$INSTDIR\uninstall.exe"
 
     ; Rule names carry "Glass" so that uninstalling this does not delete the
-    ; rules the Qt app installed under the plain names, and vice versa.
+    ; rules the older Qt build installed under the plain names, and vice versa.
+    ; Not a product name - nobody reads these outside the firewall list.
     DetailPrint "Adding firewall rules..."
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="BetterCast Glass mDNS" dir=in action=allow protocol=UDP localport=5353'
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="BetterCast Glass Streaming" dir=in action=allow protocol=TCP localport=51820'
@@ -170,7 +180,7 @@ SectionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecCore} \
-    "BetterCast Glass. Send this PC's screen to any device, extend onto it, or receive a screen from one."
+    "BetterCast. Send this PC's screen to any device, extend onto it, or receive a screen from one."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecVDD} \
     "Virtual Display Driver — creates virtual monitors so your desktop can extend onto a phone or tablet without a physical screen. Required for extending."
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
@@ -200,7 +210,7 @@ Section "Uninstall"
 
     RMDir /r "$INSTDIR"
 
-    Delete "$DESKTOP\BetterCast Glass.lnk"
+    Delete "$DESKTOP\BetterCast.lnk"
     RMDir /r "$SMPROGRAMS\${PRODUCT_NAME}"
 
     DeleteRegKey HKLM "${PRODUCT_UNINST_KEY}"

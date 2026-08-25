@@ -3,7 +3,7 @@ name: Build Glass Spike (liquidDX11)
 # Two executables, plus an installer:
 #
 #   liquidDX11.exe      - the reference, unmodified, for comparing against
-#   BetterCastGlass.exe - BetterCast's pages in that shell, driving the real
+#   BetterCast.exe - BetterCast's pages in that shell, driving the real
 #                         Qt core in-process
 #
 # The second one began as a spike, to answer the architecture question rather
@@ -228,11 +228,64 @@ jobs:
             'int d = -1; if (false) d = Glass::SurfaceDock(dockCx, o.y + innerH - 6.0f, innerW - sideW - 20.0f,')
           if ($t -eq $before) { throw "surface dock patch did not apply" }
 
-          # 7. Sidebar mark. The real logo needs a texture upload; a display
-          #    glyph at least stops it being someone else's spark.
+          # 7. One loader for the logo texture, used by both the sidebar mark
+          #    and the welcome splash. Anchored ahead of LoadPhotos because
+          #    that is the first thing after LoadWICTexture, which it calls.
+          $before = $t
+          $bcMark = @(
+            'static ID3D11ShaderResourceView* BcMark(){',
+            '    static ID3D11ShaderResourceView* srv = nullptr;',
+            '    static bool tried = false;',
+            '    if (!tried) {',
+            '        tried = true;',
+            '        std::string mp = AssetPath("bettercast-logo.png", nullptr);',
+            '        int wn = MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, nullptr, 0);',
+            '        if (wn > 1) {',
+            '            std::wstring wp((size_t)wn - 1, 0);',
+            '            MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, &wp[0], wn);',
+            '            srv = LoadWICTexture(g_pd3dDevice, wp.c_str());',
+            '        }',
+            '    }',
+            '    return srv;',
+            '}',
+            'static void LoadPhotos(ID3D11Device* dev){'
+          ) -join $lf
+          $t = $t.Replace('static void LoadPhotos(ID3D11Device* dev){', $bcMark)
+          if ($t -eq $before) { throw "logo loader patch did not apply" }
+
+          # 8. Sidebar mark: the real logo, with a glyph behind it only if the
+          #    texture could not be loaded. This used to be someone else's
+          #    spark, then a generic display glyph.
+          $before = $t
+          $markOld = '              Glass::DrawIcon(wdl, Glass::Icon::Spark, ImVec2(badge.cx, badge.cy - bs*0.02f), 40.0f*0.62f, IM_COL32(236,237,243,255), 2.8f);'
+          $markNew = @(
+            '              { ID3D11ShaderResourceView* bcm = BcMark();',
+            '                if (bcm) { float bms = 40.0f*0.74f;',
+            '                    wdl->AddImage((ImTextureID)(size_t)bcm,',
+            '                                  ImVec2(badge.cx - bms*0.5f, badge.cy - bms*0.5f),',
+            '                                  ImVec2(badge.cx + bms*0.5f, badge.cy + bms*0.5f)); }',
+            '                else Glass::DrawIcon(wdl, Glass::Icon::Display, ImVec2(badge.cx, badge.cy - bs*0.02f), 40.0f*0.62f, IM_COL32(236,237,243,255), 2.8f); }'
+          ) -join $lf
+          $t = $t.Replace($markOld, $markNew)
+          if ($t -eq $before) { throw "sidebar mark patch did not apply" }
+
+          # 9. The dynamic island. It floats over the top of the window
+          #    reading "BetterCast Ready" and reports nothing worth a permanent
+          #    pill, so it goes.
+          $before = $t
           $t = $t.Replace(
-            'Glass::DrawIcon(wdl, Glass::Icon::Spark,',
-            'Glass::DrawIcon(wdl, Glass::Icon::Display,')
+            '                Glass::DynamicIsland(Glass::Icon::Bolt,',
+            '                if (false) Glass::DynamicIsland(Glass::Icon::Bolt,')
+          if ($t -eq $before) { throw "dynamic island patch did not apply" }
+
+          # 10. The welcome toast. "Everything is up to date" is liquidDX11
+          #     talking about itself, and BetterCast has an update check that
+          #     answers that question properly in Settings.
+          $before = $t
+          $t = $t.Replace(
+            '        if (!welcomed && appClock > 1.0f) {',
+            '        if (false && !welcomed && appClock > 1.0f) {')
+          if ($t -eq $before) { throw "welcome toast patch did not apply" }
 
           # 8. The welcome splash. liquidDX11 opens on its own spark and the
           #    macOS-setup greeting - hello, Bonjour, Hola - which is charming
@@ -249,18 +302,7 @@ jobs:
           ) -join $lf
           $splashNew = @(
             '            {',
-            '                static ID3D11ShaderResourceView* bcMark = nullptr;',
-            '                static bool bcMarkTried = false;',
-            '                if (!bcMarkTried) {',
-            '                    bcMarkTried = true;',
-            '                    std::string mp = AssetPath("bettercast-logo.png", nullptr);',
-            '                    int wn = MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, nullptr, 0);',
-            '                    if (wn > 1) {',
-            '                        std::wstring wp((size_t)wn - 1, 0);',
-            '                        MultiByteToWideChar(CP_ACP, 0, mp.c_str(), -1, &wp[0], wn);',
-            '                        bcMark = LoadWICTexture(g_pd3dDevice, wp.c_str());',
-            '                    }',
-            '                }',
+            '                ID3D11ShaderResourceView* bcMark = BcMark();',
             '                const float ms = 132.0f * scale;',
             '                const ImVec2 mc(cw * 0.5f, ch * 0.5f - 120.0f * scale);',
             '                if (bcMark) {',
@@ -311,6 +353,17 @@ jobs:
           if ($u -eq $before) { throw "account state patch did not apply" }
           Set-Content $state $u -Encoding utf8
           Write-Host "ui_state.inc patched: the account is this PC"
+
+          # The profile menu's own labels live in the Glass widget library, so
+          # the main.cpp branding patch never reached them - the menu still
+          # offered "Glass Settings".
+          $fields = 'liquid-bc/examples/example_win32_directx11/src/glass/widgets/fields_color.inc'
+          $f = (Get-Content $fields -Raw).Replace([string][char]13 + $lf, $lf)
+          $before = $f
+          $f = $f.Replace('"Glass Settings"', '"BetterCast Settings"')
+          if ($f -eq $before) { throw "profile menu label patch did not apply" }
+          Set-Content $fields $f -Encoding utf8
+          Write-Host "fields_color.inc patched: profile menu says BetterCast"
 
       - name: Add the BetterCast core to the spike target
         shell: pwsh
@@ -416,7 +469,7 @@ jobs:
 
           $out = Get-ChildItem -Path build-spike -Filter 'liquidDX11.exe' -Recurse | Select-Object -First 1
           if (-not $out) { throw "the BetterCast build produced no exe" }
-          Rename-Item $out.FullName 'BetterCastGlass.exe'
+          Rename-Item $out.FullName 'BetterCast.exe'
 
       - name: Collect
         shell: pwsh
@@ -433,15 +486,15 @@ jobs:
           Copy-Item $ref.FullName out/
           Write-Host "built: liquidDX11.exe  $([math]::Round($ref.Length/1MB,1)) MB"
 
-          $bc = Get-ChildItem -Path build-spike -Filter 'BetterCastGlass.exe' -Recurse | Select-Object -First 1
+          $bc = Get-ChildItem -Path build-spike -Filter 'BetterCast.exe' -Recurse | Select-Object -First 1
           if (-not $bc) { throw "the BetterCast build produced no exe" }
           Copy-Item $bc.FullName out/
-          Write-Host "built: BetterCastGlass.exe  $([math]::Round($bc.Length/1MB,1)) MB"
+          Write-Host "built: BetterCast.exe  $([math]::Round($bc.Length/1MB,1)) MB"
 
           # Qt runtime beside the binary, or the spike will not start on a
           # machine without Qt on PATH - which is every machine but the runner.
           & "$env:Qt6_DIR/bin/windeployqt.exe" --release --no-translations `
-            --no-system-d3d-compiler --no-opengl-sw "out/BetterCastGlass.exe"
+            --no-system-d3d-compiler --no-opengl-sw "out/BetterCast.exe"
 
           # FFmpeg's DLLs too. windeployqt only knows about Qt, so without this
           # the spike dies at startup on "avcodec-61.dll was not found" - which
@@ -612,7 +665,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "makensis failed with $LASTEXITCODE" }
           Pop-Location
 
-          $setup = Get-ChildItem "$stage/BetterCastGlass-Setup-*.exe" | Select-Object -First 1
+          $setup = Get-ChildItem "$stage/BetterCast-Setup-*.exe" | Select-Object -First 1
           if (-not $setup) { throw "makensis reported success but produced no installer" }
           Move-Item $setup.FullName '.'
           Write-Host "built: $($setup.Name)  $([math]::Round($setup.Length/1MB,1)) MB"
@@ -620,8 +673,8 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: BetterCastGlass-Setup-Windows-x64
-          path: BetterCastGlass-Setup-*.exe
+          name: BetterCast-Setup-Windows-x64
+          path: BetterCast-Setup-*.exe
           if-no-files-found: error
 
       - name: Upload
