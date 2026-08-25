@@ -38,17 +38,33 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
     const uint8_t* videoData = raw + headerSize;
     int videoLen = data.size() - headerSize;
 
-    // Which codec this is, decided once per stream from the first parameter
-    // set seen. Re-sniffed only while unknown, so a mid-stream slice cannot
-    // flip it.
-    if (m_codec == Codec::Unknown) {
-        const Codec sniffed = sniffCodec(videoData, videoLen);
-        if (sniffed != Codec::Unknown) {
-            m_codec = sniffed;
+    // Which codec this is, re-read on every frame that carries a parameter
+    // set - not decided once and kept.
+    //
+    // The macOS sender changes codec on a live connection: Stephen's log shows
+    // H.264 decoding for nine seconds, then HEVC keyframes arriving on the
+    // same socket. Latching the codec at the first frame meant the switch was
+    // invisible and every frame after it was misread. Only parameter sets vote,
+    // so a slice cannot flip it mid-picture.
+    const Codec sniffed = sniffCodec(videoData, videoLen);
+    if (sniffed != Codec::Unknown && sniffed != m_codec) {
+        if (m_codec != Codec::Unknown) {
+            LogManager::instance().log(
+                QString("Decoder: sender switched from %1 to %2 mid-stream — rebuilding")
+                    .arg(m_codec == Codec::Hevc ? "H.265" : "H.264",
+                         sniffed == Codec::Hevc ? "H.265" : "H.264"));
+            // The cached sets belong to the codec being left behind, and
+            // keeping them would rebuild the decoder from another codec's
+            // parameter sets.
+            destroyDecoder();
+            m_sps.clear(); m_pps.clear(); m_vps.clear();
+            m_activeSps.clear(); m_activePps.clear(); m_activeVps.clear();
+        } else {
             LogManager::instance().log(
                 QString("Decoder: stream is %1")
-                    .arg(m_codec == Codec::Hevc ? "H.265 (HEVC)" : "H.264"));
+                    .arg(sniffed == Codec::Hevc ? "H.265 (HEVC)" : "H.264"));
         }
+        m_codec = sniffed;
     }
     const bool hevc = (m_codec == Codec::Hevc);
 
@@ -85,6 +101,16 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
         const uint8_t spsType = hevc ? 33 : 7;
         const uint8_t ppsType = hevc ? 34 : 8;
         const char* nalu = reinterpret_cast<const char*>(videoData + offset + 4);
+
+        // A parameter set is tens of bytes. Anything larger is a slice being
+        // read with the wrong codec's mask - an HEVC keyframe starts 0x28, and
+        // 0x28 & 0x1F is 8, the H.264 code for a PPS. Storing one produced
+        // "Initializing H.264 with SPS(12) + PPS(470298)" and a decoder built
+        // from half a megabyte of picture data.
+        if (naluLen >= 1024) {
+            offset += 4 + static_cast<int>(naluLen);
+            continue;
+        }
 
         if (hevc && naluType == 32) {
             m_vps = QByteArray(nalu, static_cast<int>(naluLen));
@@ -159,8 +185,18 @@ void VideoDecoder::decode(const QByteArray& data, bool hasPtsPrefix) {
 }
 
 VideoDecoder::Codec VideoDecoder::sniffCodec(const uint8_t* videoData, int videoLen) {
-    // Walk the AVCC NALUs and look for a parameter set that only one of the
-    // two codecs could have produced.
+    // Walk the AVCC NALUs looking for a sequence parameter set, which every
+    // keyframe carries and which the two codecs mark differently: H.264 uses
+    // one header byte with the type in the low 5 bits, HEVC two bytes with the
+    // type in bits 1-6.
+    //
+    // Only parameter sets are evidence, and only small ones. An HEVC IDR slice
+    // begins 0x28, and 0x28 & 0x1F is 8 - the H.264 code for a picture
+    // parameter set. Reading a half-megabyte keyframe as a PPS is precisely
+    // the failure this is here to detect, so a length that no real parameter
+    // set could have disqualifies the match rather than confirming it.
+    const int kMaxParameterSet = 1024;
+
     int offset = 0;
     while (offset + 5 <= videoLen) {
         const uint32_t naluLen = qFromBigEndian<uint32_t>(videoData + offset);
@@ -169,15 +205,19 @@ VideoDecoder::Codec VideoDecoder::sniffCodec(const uint8_t* videoData, int video
             break;
         }
         const uint8_t hdr = videoData[offset + 4];
+        const bool plausible = naluLen < kMaxParameterSet;
 
-        // HEVC: VPS 32, SPS 33, PPS 34. A VPS is decisive - H.264 has no such
-        // thing, and reading one as H.264 gives type 0, which is undefined.
+        // HEVC: VPS 32, SPS 33, PPS 34. A VPS is decisive on its own - H.264
+        // has no equivalent, and reading one as H.264 gives type 0, which
+        // H.264 does not define.
         const uint8_t hevcType = (hdr >> 1) & 0x3F;
-        if (hevcType >= 32 && hevcType <= 34) return Codec::Hevc;
+        if (plausible && hevcType >= 32 && hevcType <= 34) return Codec::Hevc;
 
-        // H.264: SPS 7, PPS 8, and the top bit is the forbidden zero bit.
+        // H.264: SPS 7, PPS 8, top bit is the forbidden zero bit.
         const uint8_t h264Type = hdr & 0x1F;
-        if ((hdr & 0x80) == 0 && (h264Type == 7 || h264Type == 8)) return Codec::H264;
+        if (plausible && (hdr & 0x80) == 0 && (h264Type == 7 || h264Type == 8)) {
+            return Codec::H264;
+        }
 
         offset += 4 + static_cast<int>(naluLen);
     }
