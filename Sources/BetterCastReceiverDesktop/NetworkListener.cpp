@@ -136,8 +136,14 @@ void NetworkListener::onTcpReadyRead() {
 
     // Safety: if buffer grows beyond 32MB, framing is likely desynced — reset
     if (buffer.size() > kMaxBufferSize) {
-        qWarning() << "TCP buffer exceeded" << (kMaxBufferSize / (1024*1024))
-                    << "MB — likely framing desync, resetting";
+        // Through LogManager, not qWarning. Both desync paths used to report
+        // only to the debug output, which no shipped build shows — so a stream
+        // that lost alignment produced a log full of impossible NALU sizes and
+        // no line saying why.
+        LogManager::instance().log(
+            QString("TCP: buffer passed %1 MB — framing has desynced, resetting. "
+                    "Everything decoded after this point is misaligned.")
+                .arg(kMaxBufferSize / (1024 * 1024)));
         buffer.clear();
         return;
     }
@@ -156,8 +162,20 @@ void NetworkListener::processTcpBuffer(QTcpSocket* socket) {
 
         // Sanity check: single frame should never exceed 8MB
         if (length > kMaxPacketSize) {
-            qWarning() << "TCP framing error: packet length" << length
-                        << "exceeds max" << kMaxPacketSize << "— resetting buffer";
+            // This is the moment a stream goes wrong, and it was invisible.
+            // Clearing the buffer does not resynchronise anything: the next
+            // bytes are still mid-frame, so this fires again and again while
+            // the decoder is handed nonsense. Saying so once, loudly, beats
+            // reading it off impossible NALU lengths afterwards.
+            QString head;
+            for (int i = 0; i < qMin(16, buffer.size() - consumed); i++) {
+                head += QString("%1 ").arg(
+                    static_cast<uint8_t>(buffer[consumed + i]), 2, 16, QChar('0'));
+            }
+            LogManager::instance().log(
+                QString("TCP: framing lost — claimed packet length %1 exceeds the %2 byte "
+                        "maximum, so the stream is misaligned from here [%3]")
+                    .arg(length).arg(kMaxPacketSize).arg(head.trimmed()));
             buffer.clear();
             consumed = 0;
             return;
@@ -233,7 +251,13 @@ void NetworkListener::handleAudioData(const QByteArray& data) {
     static int audioCount = 0;
     audioCount++;
     if (audioCount <= 3 || audioCount % 200 == 0) {
-        qDebug() << "NetworkListener: Received audio data" << data.size() << "bytes (packet" << audioCount << ")";
+        // Also in the log rather than only the debug output: whether audio is
+        // arriving at all is the first question when a stream that used to
+        // work stops working, and it could not be answered from a log file.
+        LogManager::instance().log(
+            QString("Audio: packet %1, %2 bytes, decoder %3")
+                .arg(audioCount).arg(data.size())
+                .arg(m_audioDecoder ? "attached" : "none"));
     }
     if (m_audioDecoder) {
         m_audioDecoder->decode(data);
