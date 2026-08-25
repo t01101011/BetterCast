@@ -171,7 +171,12 @@ Section "Virtual Display Driver (VDD)" SecVDD
     Goto vdd_skip_registry
 
     vdd_done:
-    WriteRegStr HKLM "Software\BetterCastGlass" "VDDPath" "$INSTDIR\VirtualDisplayDriver"
+    ; Software\BetterCast, not Software\BetterCastGlass. This is not a product
+    ; identity - it is the value VirtualDisplayVDD.cpp reads as Method 0 of its
+    ; driver detection, and it looks under Software\BetterCast. Writing it
+    ; anywhere else means the app reports "VDD: Not installed" on a machine
+    ; where this installer just installed it, which is exactly what happened.
+    WriteRegStr HKLM "Software\BetterCast" "VDDPath" "$INSTDIR\VirtualDisplayDriver"
 
     vdd_skip_registry:
 SectionEnd
@@ -215,5 +220,5 @@ Section "Uninstall"
 
     DeleteRegKey HKLM "${PRODUCT_UNINST_KEY}"
     DeleteRegKey HKLM "${PRODUCT_DIR_REGKEY}"
-    DeleteRegKey HKLM "Software\BetterCastGlass"
+    DeleteRegKey HKLM "Software\BetterCast"
 SectionEnd

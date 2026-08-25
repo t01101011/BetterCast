@@ -55,6 +55,21 @@ The Windows side sends, to TCP **51822** on the sender, one
   "mode": "extend", "port": 51820 }
 ```
 
+and expects, on the same connection, one framed reply identifying the app:
+
+```json
+{ "app": "BetterCast", "ok": true }
+```
+
+**The reply is not optional.** Without it Windows treats the device as unable
+to answer, and the buttons stay disabled. That is deliberate: the first version
+took "the TCP connection was accepted" as proof, something unrelated on the Mac
+accepts on 51822, and the buttons enabled themselves and sent four requests
+into a process that had never heard of BetterCast.
+
+`mode` is also `probe`, which means identify yourself and start nothing — that
+is what the enabled/disabled state is decided by.
+
 `type` 99 is `InputEventType.command` and `keyCode` 770 is a device hello —
 the shape `InviteListener` on the Windows side already accepts, so both ends
 of this protocol are the same format. `mode` is `extend` or `mirror`. `port`
@@ -65,9 +80,12 @@ What the Mac needs, all in `BetterCastSenderApp.swift`, and small because both
 switches it has to flip already exist:
 
 1. An `NWListener` on 51822 that reads one length-prefixed JSON frame.
-2. On a frame with `type == 99 && keyCode == 770`: set `useVirtualDisplay` from
-   `mode` (`extend` → `true`, `mirror` → `false`), then call `connect(to:)`
-   for the peer that sent it, at the `port` it named.
+2. On a frame with `type == 99 && keyCode == 770`: reply
+   `{"app":"BetterCast","ok":true}` framed the same way — **always**, including
+   for `mode == "probe"`, which is how Windows decides whether to offer the
+   buttons at all. Then, unless the mode is `probe`, set `useVirtualDisplay`
+   from it (`extend` → `true`, `mirror` → `false`) and call `connect(to:)` for
+   the peer that sent it, at the `port` it named.
 
 `connect(to:)` and `useVirtualDisplay` (line ~2250) are exactly what the
 Auto-Connect path already drives, so this is wiring, not new streaming code.

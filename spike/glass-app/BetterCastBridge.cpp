@@ -273,14 +273,14 @@ constexpr int kProbeTimeoutMs = 1500;
 
 std::map<std::string, AskSupport> g_askSupport;
 
-// One length-prefixed JSON frame: the request itself, and the probe reuses the
-// connection test without sending anything.
-QByteArray buildAskFrame(bool extend) {
+// One length-prefixed JSON frame. `mode` is extend, mirror, or probe - probe
+// asks the other end to identify itself and start nothing.
+QByteArray buildAskFrame(const char* mode) {
     QJsonObject obj;
     obj["type"]       = 99;    // InputEventType.command on the Mac
     obj["keyCode"]    = 770;   // device hello, the one InviteListener accepts
     obj["deviceName"] = QString::fromStdString(userName());
-    obj["mode"]       = extend ? "extend" : "mirror";
+    obj["mode"]       = mode;
     // Dial back here. Named rather than assumed, because a receiver that had
     // to fall back to another port would otherwise never be reached.
     obj["port"]       = g_network ? int(g_network->actualTcpPort()) : 51820;
@@ -292,6 +292,27 @@ QByteArray buildAskFrame(bool extend) {
     out << quint32(payload.size());
     frame.append(payload);
     return frame;
+}
+
+// Whether a reply came from BetterCast rather than from whatever else happened
+// to be listening on that port.
+//
+// This exists because the first version of the probe treated "the TCP
+// connection was accepted" as "this device can be asked", and something
+// unrelated on the Mac accepts on this port. The buttons enabled themselves,
+// the request went out, and it was read by a process that had no idea what it
+// was. Only an answer in our own words counts.
+bool isBetterCastAck(const QByteArray& buf) {
+    if (buf.size() < 4) return false;
+    QDataStream in(buf);
+    in.setByteOrder(QDataStream::BigEndian);
+    quint32 len = 0;
+    in >> len;
+    if (len == 0 || len > 8192) return false;
+    if (quint32(buf.size()) < 4 + len) return false;   // still arriving
+
+    const QJsonDocument doc = QJsonDocument::fromJson(buf.mid(4, int(len)));
+    return doc.isObject() && doc.object().value("app").toString() == "BetterCast";
 }
 
 // Settings for one device, under a key of its own.
@@ -626,9 +647,11 @@ void probeAskSupport(const std::string& host) {
     auto* sock = new QTcpSocket();
     auto* timer = new QTimer();
     timer->setSingleShot(true);
+    auto buf = std::make_shared<QByteArray>();
 
-    // Connected, refused and timed out all have to land exactly once, and all
-    // three have to clean up both objects. settle() is that one place.
+    // Connected, refused, answered and timed out all have to land exactly
+    // once, and all of them have to clean up both objects. settle() is that
+    // one place.
     auto settle = [sock, timer, host](AskSupport result) {
         if (g_askSupport[host] != AskSupport::Probing) return;   // already settled
         g_askSupport[host] = result;
@@ -639,9 +662,19 @@ void probeAskSupport(const std::string& host) {
         requestRedraw();
     };
 
-    QObject::connect(sock, &QTcpSocket::connected, [settle]() { settle(AskSupport::Yes); });
+    // Connecting is not the answer - it only says a socket accepted. Ask, and
+    // wait to be answered in our own words.
+    QObject::connect(sock, &QTcpSocket::connected,
+                     [sock]() { sock->write(buildAskFrame("probe")); });
+    QObject::connect(sock, &QTcpSocket::readyRead, [sock, buf, settle]() {
+        buf->append(sock->readAll());
+        if (isBetterCastAck(*buf)) settle(AskSupport::Yes);
+        else if (buf->size() > 8192) settle(AskSupport::No);   // noise, not us
+    });
     QObject::connect(sock, &QTcpSocket::errorOccurred,
                      [settle](QAbstractSocket::SocketError) { settle(AskSupport::No); });
+    // Silence counts as no. Something that accepts and never answers is not
+    // BetterCast, and that is the case this whole change exists for.
     QObject::connect(timer, &QTimer::timeout, [settle]() { settle(AskSupport::No); });
 
     timer->start(kProbeTimeoutMs);
@@ -666,18 +699,36 @@ bool askToSend(const std::string& host, bool extend) {
         return false;
     }
 
-    const QByteArray frame = buildAskFrame(extend);
-    sock.write(frame);
-    const bool sent = sock.waitForBytesWritten(kProbeTimeoutMs);
+    const char* mode = extend ? "extend" : "mirror";
+    sock.write(buildAskFrame(mode));
+    if (!sock.waitForBytesWritten(kProbeTimeoutMs)) {
+        LogManager::instance().log(
+            QString("Glass: could not send the request to %1").arg(QString::fromStdString(host)));
+        requestRedraw();
+        return false;
+    }
+
+    // Sent is not done. The first version logged success here, and it said so
+    // four times while the bytes were being read by some unrelated process on
+    // the Mac that had never heard of BetterCast. Wait to be answered.
+    QByteArray buf;
+    while (sock.waitForReadyRead(kProbeTimeoutMs)) {
+        buf.append(sock.readAll());
+        if (isBetterCastAck(buf)) break;
+        if (buf.size() > 8192) break;
+    }
+    const bool acked = isBetterCastAck(buf);
     sock.disconnectFromHost();
 
+    if (!acked) g_askSupport[host] = AskSupport::No;
     LogManager::instance().log(
-        sent ? QString("Glass: asked %1 to %2 onto this PC")
-                   .arg(QString::fromStdString(host), extend ? "extend" : "mirror")
-             : QString("Glass: could not send the request to %1")
-                   .arg(QString::fromStdString(host)));
+        acked ? QString("Glass: asked %1 to %2 onto this PC")
+                    .arg(QString::fromStdString(host), mode)
+              : QString("Glass: %1 took the request but did not answer as BetterCast, "
+                        "so nothing will happen - the Mac app cannot do this yet")
+                    .arg(QString::fromStdString(host)));
     requestRedraw();
-    return sent;
+    return acked;
 }
 
 void openLogFile() {
