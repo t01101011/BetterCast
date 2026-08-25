@@ -205,6 +205,41 @@ const std::vector<std::string>& logLines();
 // Opens the log file in whatever the user reads text with.
 void openLogFile();
 
+// ── Asking another device for its screen ─────────────────────────────────
+//
+// The reverse of everything else here: instead of sending this PC's screen
+// out, this asks a Mac to send its screen to this PC, so the Mac never has to
+// be touched. Extend gives this PC its own virtual display over there; Mirror
+// duplicates the Mac's main screen.
+//
+// The request travels to the sender's invite port as
+// [4B big-endian length][JSON], carrying `type` 99 and `keyCode` 770 - the
+// shape InviteListener on this side already accepts - plus the mode and the
+// port to dial back on.
+//
+// This only works against a sender that listens for it, and as of BetterCast
+// 18 the macOS app does not. Rather than offer a button that fails, the UI
+// asks first: whoever is listening on the invite port can be asked, and
+// whoever is not is shown as not ready. That means the day the Mac gains the
+// listener, this side needs no change at all.
+
+enum class AskSupport {
+    Unknown,   // not looked at yet
+    Probing,   // asking now
+    Yes,       // something is listening and can be asked
+    No         // nothing there
+};
+
+AskSupport askSupport(const std::string& host);
+
+// Starts a probe if this host has not been looked at. Cheap and cached, so it
+// is safe to call from the render loop.
+void probeAskSupport(const std::string& host);
+
+// Ask that device to start sending to this PC. `extend` picks a virtual
+// display over there; false mirrors its main screen.
+bool askToSend(const std::string& host, bool extend);
+
 // Language codes and their names in their own language, for the picker.
 std::vector<std::pair<std::string, std::string>> languages();
 std::string savedLanguage();                       // empty means follow system

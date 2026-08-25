@@ -40,18 +40,49 @@ receive path.
 
 **Needs a macOS session.** Two things cannot be finished from Windows:
 
-1. *"Extend Mac here"* — a button on Windows asking the Mac to start sending.
-   The Mac has no listener for it. Its only three `NWListener`s are in
-   `ReceiverNetworkListener.swift` and all of them are for receiving video, and
-   nothing in the repo advertises or browses an invite service. Before building
-   a protocol, try the Mac sender's existing **Auto-Connect** toggle
-   (`BetterCastSenderApp.swift`, `autoConnect`) — it may already start streaming
-   to a discovered receiver, which would make the Windows button unnecessary.
+1. **Answering "extend/mirror your screen onto this PC".** The Windows half is
+   written and shipping; the Mac half is not, and until it exists the two
+   buttons draw disabled with an explanation. See below.
 2. Audio playback on the Mac side.
 
-`InviteListener` (on `fix/android-windows-discovery`, unmerged) is the *opposite*
-half: Windows accepting invites from phones. It is not what "Extend Mac here"
-needs.
+### The Mac half of "ask that device for its screen"
+
+The Windows side sends, to TCP **51822** on the sender, one
+`[4B big-endian length][JSON]` frame:
+
+```json
+{ "type": 99, "keyCode": 770, "deviceName": "STUDIO-PC (Windows)",
+  "mode": "extend", "port": 51820 }
+```
+
+`type` 99 is `InputEventType.command` and `keyCode` 770 is a device hello —
+the shape `InviteListener` on the Windows side already accepts, so both ends
+of this protocol are the same format. `mode` is `extend` or `mirror`. `port`
+is where to dial back, named rather than assumed so a receiver that fell back
+to another port is still reachable.
+
+What the Mac needs, all in `BetterCastSenderApp.swift`, and small because both
+switches it has to flip already exist:
+
+1. An `NWListener` on 51822 that reads one length-prefixed JSON frame.
+2. On a frame with `type == 99 && keyCode == 770`: set `useVirtualDisplay` from
+   `mode` (`extend` → `true`, `mirror` → `false`), then call `connect(to:)`
+   for the peer that sent it, at the `port` it named.
+
+`connect(to:)` and `useVirtualDisplay` (line ~2250) are exactly what the
+Auto-Connect path already drives, so this is wiring, not new streaming code.
+
+**What works today without any of this:** turn on **Auto-Connect** in the Mac
+sender and set **Use as** to Extended Display or Mirror Built-in. `autoConnect`
+(line ~2371) calls `connect(to:)` for every newly discovered receiver, so the
+Mac starts sending to Windows as soon as Windows appears. The difference is
+that it applies to every receiver and is controlled from the Mac.
+
+Note: no client anywhere in this repo sends the 770 hello — not iOS, not
+Android, not macOS. The format was designed on the Windows side for
+`InviteListener` (on `fix/android-windows-discovery`, unmerged) and the Windows
+sender above is its first user. Nothing else depends on it, so it can still be
+changed freely.
 
 **Windows-side, not started.**
 

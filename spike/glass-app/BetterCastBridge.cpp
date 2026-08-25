@@ -24,9 +24,15 @@
 #include <QUrl>
 #include <QCoreApplication>
 #include <QOpenGLWidget>
+#include <QDataStream>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTcpSocket>
+
+#include <map>
 #include <QTimer>
 
 #include <memory>
@@ -251,6 +257,41 @@ void probeAndroid() {
                          requestRedraw();
                      });
     p->start(adb, QStringList() << "devices" << "-l");
+}
+
+// ── Asking another device for its screen ─────────────────────────────────
+
+// Where a sender listens for "please stream to me". Matches
+// InviteListener::DefaultPort, which is this app's own implementation of the
+// receiving half.
+constexpr uint16_t kInvitePort = 51822;
+
+// Long enough to cross a home network, short enough that a device which is
+// simply not listening does not leave the button greyed out while the user
+// waits to find out.
+constexpr int kProbeTimeoutMs = 1500;
+
+std::map<std::string, AskSupport> g_askSupport;
+
+// One length-prefixed JSON frame: the request itself, and the probe reuses the
+// connection test without sending anything.
+QByteArray buildAskFrame(bool extend) {
+    QJsonObject obj;
+    obj["type"]       = 99;    // InputEventType.command on the Mac
+    obj["keyCode"]    = 770;   // device hello, the one InviteListener accepts
+    obj["deviceName"] = QString::fromStdString(userName());
+    obj["mode"]       = extend ? "extend" : "mirror";
+    // Dial back here. Named rather than assumed, because a receiver that had
+    // to fall back to another port would otherwise never be reached.
+    obj["port"]       = g_network ? int(g_network->actualTcpPort()) : 51820;
+
+    const QByteArray payload = QJsonDocument(obj).toJson(QJsonDocument::Compact);
+    QByteArray frame;
+    QDataStream out(&frame, QIODevice::WriteOnly);
+    out.setByteOrder(QDataStream::BigEndian);
+    out << quint32(payload.size());
+    frame.append(payload);
+    return frame;
 }
 
 // Settings for one device, under a key of its own.
@@ -567,6 +608,76 @@ std::string logFilePath() {
 
 const std::vector<std::string>& logLines() {
     return g_logLines;
+}
+
+// ── Asking another device for its screen ─────────────────────────────────
+
+AskSupport askSupport(const std::string& host) {
+    const auto it = g_askSupport.find(host);
+    return it == g_askSupport.end() ? AskSupport::Unknown : it->second;
+}
+
+void probeAskSupport(const std::string& host) {
+    if (host.empty()) return;
+    if (g_askSupport.find(host) != g_askSupport.end()) return;   // already known or in flight
+
+    g_askSupport[host] = AskSupport::Probing;
+
+    auto* sock = new QTcpSocket();
+    auto* timer = new QTimer();
+    timer->setSingleShot(true);
+
+    // Connected, refused and timed out all have to land exactly once, and all
+    // three have to clean up both objects. settle() is that one place.
+    auto settle = [sock, timer, host](AskSupport result) {
+        if (g_askSupport[host] != AskSupport::Probing) return;   // already settled
+        g_askSupport[host] = result;
+        timer->stop();
+        timer->deleteLater();
+        sock->abort();
+        sock->deleteLater();
+        requestRedraw();
+    };
+
+    QObject::connect(sock, &QTcpSocket::connected, [settle]() { settle(AskSupport::Yes); });
+    QObject::connect(sock, &QTcpSocket::errorOccurred,
+                     [settle](QAbstractSocket::SocketError) { settle(AskSupport::No); });
+    QObject::connect(timer, &QTimer::timeout, [settle]() { settle(AskSupport::No); });
+
+    timer->start(kProbeTimeoutMs);
+    sock->connectToHost(QString::fromStdString(host), kInvitePort);
+}
+
+bool askToSend(const std::string& host, bool extend) {
+    if (host.empty()) return false;
+
+    // Blocking, deliberately: this is one small frame to a host that has
+    // already answered a probe, it happens on a button press, and the
+    // alternative is threading a result back through three callbacks to say
+    // "sent". waitForConnected is bounded by the same timeout as the probe.
+    QTcpSocket sock;
+    sock.connectToHost(QString::fromStdString(host), kInvitePort);
+    if (!sock.waitForConnected(kProbeTimeoutMs)) {
+        g_askSupport[host] = AskSupport::No;
+        LogManager::instance().log(
+            QString("Glass: %1 did not answer on port %2, so it cannot be asked to send")
+                .arg(QString::fromStdString(host)).arg(kInvitePort));
+        requestRedraw();
+        return false;
+    }
+
+    const QByteArray frame = buildAskFrame(extend);
+    sock.write(frame);
+    const bool sent = sock.waitForBytesWritten(kProbeTimeoutMs);
+    sock.disconnectFromHost();
+
+    LogManager::instance().log(
+        sent ? QString("Glass: asked %1 to %2 onto this PC")
+                   .arg(QString::fromStdString(host), extend ? "extend" : "mirror")
+             : QString("Glass: could not send the request to %1")
+                   .arg(QString::fromStdString(host)));
+    requestRedraw();
+    return sent;
 }
 
 void openLogFile() {

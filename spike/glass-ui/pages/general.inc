@@ -137,6 +137,59 @@
                 }
                 Glass::EndPanel();
 
+                // The other direction: that device's screen, on this PC,
+                // without walking over to it.
+                Glass::BeginPanel("THEIR SCREEN ON THIS PC");
+                if (bcSelected < 0) {
+                    ImGui::TextDisabled("No device selected.");
+                } else {
+                    const auto& target = bcDevices[(size_t)bcSelected];
+                    BetterCastBridge::probeAskSupport(target.host);
+                    const auto support = BetterCastBridge::askSupport(target.host);
+
+                    ImGui::TextWrapped("Asks that device to send its screen here, so you "
+                                       "never have to touch it. Extend gives this PC a "
+                                       "display of its own over there; Mirror duplicates "
+                                       "its main screen.");
+                    ImGui::Dummy(ImVec2(0, 8));
+
+                    // Drawn either way rather than hidden, so it is clear the
+                    // feature exists and what is missing. Enabled the moment
+                    // the other end starts listening - no change needed here.
+                    const bool canAsk = support == BetterCastBridge::AskSupport::Yes;
+                    if (!canAsk) ImGui::BeginDisabled();
+                    if (Glass::Button("Mirror Their Screen Here", false)) {
+                        BetterCastBridge::askToSend(target.host, false);
+                    }
+                    ImGui::SameLine();
+                    if (Glass::Button("Extend Them Onto This PC", true)) {
+                        BetterCastBridge::askToSend(target.host, true);
+                    }
+                    if (!canAsk) ImGui::EndDisabled();
+
+                    ImGui::Dummy(ImVec2(0, 6));
+                    switch (support) {
+                        case BetterCastBridge::AskSupport::Probing:
+                            ImGui::TextDisabled("Asking whether it can be asked...");
+                            break;
+                        case BetterCastBridge::AskSupport::Yes:
+                            ImGui::TextDisabled("Ready.");
+                            break;
+                        default:
+                            // The macOS app does not listen for this yet. Say
+                            // so, and say what does work in the meantime,
+                            // rather than leaving a dead button unexplained.
+                            ImGui::TextWrapped("This device cannot be asked yet - the Mac "
+                                               "app needs the version that listens for it. "
+                                               "Until then, turn on Auto-Connect on the Mac "
+                                               "and set Use as to Extended Display or "
+                                               "Mirror Built-in; it will start sending here "
+                                               "on its own.");
+                            break;
+                    }
+                }
+                Glass::EndPanel();
+
                 Glass::BeginPanel("STREAM QUALITY FOR THIS DEVICE");
                 if (bcSelected < 0) {
                     ImGui::TextDisabled("No device selected.");
