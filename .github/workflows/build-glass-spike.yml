@@ -461,6 +461,10 @@ jobs:
             "    `"$core/AudioDecoder.h`"",
             "    `"$core/AudioPlayer.cpp`"",
             "    `"$core/AudioPlayer.h`"",
+            "    `"$core/HotspotManager.cpp`"",
+            "    `"$core/HotspotManager.h`"",
+            "    `"$core/AdbHelper.cpp`"",
+            "    `"$core/AdbHelper.h`"",
             "    `"$core/Language.cpp`"",
             "    `"$core/Language.h`"",
             "    `"$core/UpdateChecker.cpp`"",
@@ -480,6 +484,14 @@ jobs:
             "    `"$core/sender/VideoEncoderFF.h`"",
             ')',
             "target_include_directories(liquidDX11 PRIVATE `"$spike`" `"$core`")",
+            '',
+            '# HotspotManager alone needs C++20. It talks to Windows Mobile Hotspot',
+            '# through C++/WinRT, whose headers pull in <experimental/coroutine> and',
+            '# hard-error under C++17 - not a warning, a failed compile. The core',
+            '# CMakeLists sets exactly this property on exactly this file for the same',
+            '# reason; the rest of the tree stays on whatever it was using.',
+            "set_source_files_properties(`"$core/HotspotManager.cpp`" PROPERTIES",
+            '    COMPILE_OPTIONS "/std:c++20")',
             'target_compile_definitions(liquidDX11 PRIVATE ENABLE_SENDER=1',
             "    BETTERCAST_VERSION=`"$bcVersion`")",
             'find_package(FFMPEG REQUIRED)',
@@ -489,7 +501,10 @@ jobs:
             '    Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Network Qt6::OpenGL Qt6::OpenGLWidgets',
             '    Qt6::Multimedia',
             '    ${FFMPEG_LIBRARIES}',
-            '    d3d11 dxgi setupapi user32 winmm ws2_32)',
+            '    d3d11 dxgi setupapi user32 winmm ws2_32',
+            '    # windowsapp: the C++/WinRT umbrella import library, without which',
+            '    # NetworkOperatorTetheringManager compiles and then fails to link.',
+            '    windowsapp)',
             '',
             '# No console window. liquidDX11 calls add_executable without WIN32, so it',
             '# links as a console binary and Windows opens a terminal beside the app -',
@@ -610,6 +625,28 @@ jobs:
           foreach ($d in 'data', 'misc/fonts') {
             $src = Join-Path 'liquidDX11' $d
             if (Test-Path $src) { Copy-Item -Recurse $src out/ -ErrorAction SilentlyContinue }
+          }
+
+          # Attribution travels with the build. The UI is liquidDX11's (MIT,
+          # by Pondot), and MIT's one condition is that the license text
+          # accompanies the code - so the upstream texts ship verbatim in
+          # licenses/, and the summary beside the exe points at them. Throw
+          # rather than ship a build that quietly lost its notices.
+          New-Item -ItemType Directory -Force out/licenses | Out-Null
+          $lx = 'liquidDX11/examples/example_win32_directx11'
+          Copy-Item "$lx/LICENSE" 'out/licenses/liquidDX11-LICENSE.txt'
+          Copy-Item "$lx/THIRD-PARTY-NOTICES.md" 'out/licenses/THIRD-PARTY-NOTICES.md'
+          Copy-Item "$lx/DISCLAIMER.md" 'out/licenses/DISCLAIMER.md'
+          Copy-Item 'liquidDX11/LICENSE.txt' 'out/licenses/DearImGui-LICENSE.txt'
+          Copy-Item 'bettercast/LICENSE' 'out/licenses/BetterCast-LICENSE.txt'
+          Copy-Item 'bettercast/spike/glass-app/THIRD-PARTY-NOTICES.md' 'out/THIRD-PARTY-NOTICES.md'
+          foreach ($need in 'THIRD-PARTY-NOTICES.md',
+                            'licenses/liquidDX11-LICENSE.txt',
+                            'licenses/THIRD-PARTY-NOTICES.md',
+                            'licenses/DISCLAIMER.md',
+                            'licenses/DearImGui-LICENSE.txt',
+                            'licenses/BetterCast-LICENSE.txt') {
+            if (-not (Test-Path "out/$need")) { throw "$need did not reach the output" }
           }
 
       - name: Download Virtual Display Driver (VDD)

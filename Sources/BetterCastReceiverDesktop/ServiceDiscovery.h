@@ -26,6 +26,12 @@ public:
 
     // Start advertising as a BetterCast receiver
     void startAdvertising(uint16_t tcpPort);
+
+    // What this machine is announcing itself as, once startAdvertising has
+    // worked it out. The name is assembled there from the user's chosen name,
+    // the hostname and the platform keyword, so it is not something a caller
+    // can reconstruct - and a UI claiming to show it was inventing one.
+    QString advertisedName() const { return m_serviceName; }
     void stopAdvertising();
 
     // Browse for other BetterCast receivers on the network

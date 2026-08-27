@@ -137,6 +137,57 @@ struct StreamSettings {
 StreamSettings settingsFor(const std::string& deviceName);
 void setSettingsFor(const std::string& deviceName, const StreamSettings& s);
 
+// ── Receiving ────────────────────────────────────────────────────────────
+
+// The port this PC is listening on, described for a person to read.
+std::string listeningOn();
+
+// The name other devices see. Assembled by ServiceDiscovery from the chosen
+// name, the hostname and the platform keyword, so it is not the same thing as
+// userName().
+std::string advertisedName();
+
+// Whether something is sending a screen here right now.
+bool isReceiving();
+
+// ── Wi-Fi hotspot ────────────────────────────────────────────────────────
+//
+// Streaming only needs both devices on one local network; it never touches the
+// internet. On a network with client isolation - a hotel, a mall, a campus -
+// that local path does not exist and nothing else in this app can work, so
+// hosting an access point from this machine is the fix rather than a
+// convenience.
+
+struct HotspotInfo {
+    bool supported = false;   // Windows answered at all
+    bool on        = false;
+    std::string ssid;
+    std::string passphrase;   // what a phone needs to join
+    int clients    = 0;
+    int maxClients = 0;
+    std::string error;        // why it is unsupported, when it is
+};
+
+// Cached and re-read about once a second, so it is safe to call every frame.
+HotspotInfo hotspot();
+void setHotspot(bool on);
+
+// Whether the hotspot is meant to be on. Windows switches it off by itself
+// after about five minutes with nobody connected, so this is what the re-arm
+// timer checks - a pairing screen that started it once would otherwise go dead
+// underneath the code it is showing.
+bool hotspotWanted();
+
+// ── Android over the cable ───────────────────────────────────────────────
+//
+// The opposite of the scrcpy panel below: this receives an Android phone's
+// screen over USB, by forwarding a port through adb and dialling it, for when
+// Wi-Fi discovery will not cooperate.
+
+bool androidCableAvailable();
+std::string androidCableStatus();
+bool receiveFromAndroidOverCable();
+
 // ── Android over USB ─────────────────────────────────────────────────────
 //
 // The one feature that runs the other way. Everything else here sends this

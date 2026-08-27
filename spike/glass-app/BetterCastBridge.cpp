@@ -1,7 +1,9 @@
 #include "BetterCastBridge.h"
 
+#include "AdbHelper.h"
 #include "AudioDecoder.h"
 #include "AudioPlayer.h"
+#include "HotspotManager.h"
 #include "InputHandler.h"
 #include "VideoWindow.h"
 #include "LogManager.h"
@@ -38,6 +40,7 @@
 #include <QTimer>
 
 #include <memory>
+#include <thread>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -77,6 +80,12 @@ std::unique_ptr<VideoWindow>      g_videoWindow;
 std::unique_ptr<InputHandler>     g_input;
 std::unique_ptr<AudioDecoder>     g_audioDecoder;
 std::unique_ptr<AudioPlayer>      g_audioPlayer;
+std::unique_ptr<HotspotManager>   g_hotspot;
+std::unique_ptr<AdbHelper>        g_adbHelper;
+QTimer*                           g_hotspotTimer = nullptr;
+bool                              g_hotspotWanted = false;
+std::string                       g_cableStatus;
+bool                              g_cableBusy = false;
 // Something is sending us a screen right now. The event pump has to keep up
 // with it, which it will not do on the idle cadence.
 bool                              g_receiving = false;
@@ -505,6 +514,43 @@ bool init(int argc, char** argv) {
                      [](const QString& m) { LogManager::instance().log(m); });
 #endif
 
+    // ── Hotspot ──────────────────────────────────────────────────────────
+    g_hotspot = std::make_unique<HotspotManager>();
+    QObject::connect(g_hotspot.get(), &HotspotManager::stateChanged,
+                     [](const HotspotManager::Info&) { requestRedraw(); });
+    QObject::connect(g_hotspot.get(), &HotspotManager::failed,
+                     [](const QString& message) {
+                         g_hotspotWanted = false;
+                         LogManager::instance().log("Hotspot: " + message);
+                         requestRedraw();
+                     });
+
+    // Windows turns the hotspot off by itself after roughly five minutes with
+    // nobody connected, which HotspotManager's own header warns about: a
+    // pairing screen that starts it once and waits for someone to walk to
+    // their phone goes dead underneath the code it is showing. So keep it
+    // armed rather than trusting it to stay up.
+    g_hotspotTimer = new QTimer();
+    g_hotspotTimer->setInterval(15000);
+    QObject::connect(g_hotspotTimer, &QTimer::timeout, []() {
+        if (!g_hotspot || !g_hotspotWanted) return;
+        const auto info = g_hotspot->query();
+        if (info.supported && !info.on) {
+            LogManager::instance().log("Hotspot: Windows switched it off — starting it again");
+            g_hotspot->start();
+        }
+    });
+    g_hotspotTimer->start();
+
+    // ── Android over the cable ───────────────────────────────────────────
+    g_adbHelper = std::make_unique<AdbHelper>();
+    QObject::connect(g_adbHelper.get(), &AdbHelper::statusChanged,
+                     [](const QString& status) {
+                         g_cableStatus = status.toStdString();
+                         LogManager::instance().log(status);
+                         requestRedraw();
+                     });
+
     LogManager::instance().log("Glass: BetterCast core running inside the D3D11 loop");
     return true;
 }
@@ -609,6 +655,17 @@ void shutdown() {
         delete g_adbTimer;
         g_adbTimer = nullptr;
     }
+    if (g_hotspotTimer) {
+        g_hotspotTimer->stop();
+        delete g_hotspotTimer;
+        g_hotspotTimer = nullptr;
+    }
+    // Left running deliberately if it is up: the hotspot is a Windows setting,
+    // not a thing this process owns, and someone who started one to pair a
+    // phone does not expect closing the window to drop the phone off the
+    // network. Windows switches it off on its own once nobody is connected.
+    g_hotspot.reset();
+    g_adbHelper.reset();
     if (g_adb) {
         g_adb->kill();
         g_adb->waitForFinished(1000);
@@ -1035,6 +1092,109 @@ void setSettingsFor(const std::string& deviceName, const StreamSettings& v) {
     s.setValue(k + "bitrate", v.bitrateMbps);
     s.setValue(k + "width",   v.width);
     s.setValue(k + "height",  v.height);
+}
+
+// ── Receiving ────────────────────────────────────────────────────────────
+
+std::string listeningOn() {
+    if (!g_network) return "not listening";
+    return "port " + std::to_string(g_network->actualTcpPort()) + " (TCP)";
+}
+
+std::string advertisedName() {
+    if (!g_discovery) return {};
+    const QString name = g_discovery->advertisedName();
+    return name.isEmpty() ? std::string("not advertising yet") : name.toStdString();
+}
+
+bool isReceiving() {
+    return g_receiving;
+}
+
+// ── Wi-Fi hotspot ────────────────────────────────────────────────────────
+
+HotspotInfo hotspot() {
+    static HotspotInfo cached;
+    static uint64_t lastQuery = 0;
+
+    // query() is described as cheap enough for the UI thread, which is true of
+    // a click and not of sixty calls a second - the page reads this every
+    // frame. A second is well inside how fast a phone can join.
+    const uint64_t now = nowMs();
+    if (lastQuery != 0 && now - lastQuery < 1000) return cached;
+    lastQuery = now;
+
+    if (!g_hotspot) return cached;
+    const auto info = g_hotspot->query();
+
+    HotspotInfo out;
+    out.supported  = info.supported;
+    out.on         = info.on;
+    out.ssid       = info.ssid.toStdString();
+    out.passphrase = info.passphrase.toStdString();
+    out.clients    = info.clientCount;
+    out.maxClients = info.maxClients;
+    out.error      = info.error.toStdString();
+    cached = out;
+    return cached;
+}
+
+void setHotspot(bool on) {
+    if (!g_hotspot) return;
+    g_hotspotWanted = on;
+    LogManager::instance().log(on ? "Hotspot: starting..." : "Hotspot: stopping...");
+    if (on) g_hotspot->start();
+    else    g_hotspot->stop();
+    requestRedraw();
+}
+
+bool hotspotWanted() {
+    return g_hotspotWanted;
+}
+
+// ── Android over the cable ───────────────────────────────────────────────
+
+bool androidCableAvailable() {
+    return g_adbHelper && g_adbHelper->isAvailable();
+}
+
+std::string androidCableStatus() {
+    return g_cableStatus;
+}
+
+bool receiveFromAndroidOverCable() {
+    if (!g_adbHelper || !g_network || g_cableBusy) return false;
+
+    g_cableBusy = true;
+    g_cableStatus = "looking for a phone on the cable...";
+    requestRedraw();
+
+    // Off the loop, because setupForward runs adb and waits on it - up to ten
+    // seconds. On this thread that is ten seconds of frozen window and, worse,
+    // ten seconds during which nothing pumps the sockets.
+    std::thread([]() {
+        const bool ok = g_adbHelper->setupForward(51820);
+        const uint16_t local = g_adbHelper->lastLocalPort();
+
+        // Back to the Qt thread to touch the listener. g_network is the
+        // context object, so if it is gone by then the call is simply dropped.
+        QMetaObject::invokeMethod(g_network.get(), [ok, local]() {
+            g_cableBusy = false;
+            if (ok) {
+                g_cableStatus = "tunnel ready on localhost:" + std::to_string(local);
+                LogManager::instance().log(
+                    QString("ADB: tunnel established, dialling localhost:%1").arg(local));
+                g_network->connectTo("localhost", local);
+            } else {
+                g_cableStatus = "no Android device answered adb";
+                LogManager::instance().log(
+                    "ADB: no device answered - check the cable and that USB debugging is on");
+            }
+            requestRedraw();
+        }, Qt::QueuedConnection);
+    }).detach();
+
+    return true;
 }
 
 // ── Android over USB ─────────────────────────────────────────────────────
