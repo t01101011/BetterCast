@@ -21,7 +21,7 @@ public:
     void disconnect();
     bool isConnected() const;
 
-    void sendVideo(const QByteArray& payload);
+    bool sendVideo(const QByteArray& payload);
     void sendAudio(const QByteArray& payload);
 
 signals:
@@ -32,7 +32,7 @@ signals:
     void inputPacket(const QByteArray& json);
 
 private:
-    void sendPacket(uint8_t type, const QByteArray& payload);
+    bool sendPacket(uint8_t type, const QByteArray& payload);
     void attemptConnect();
     void onReadyRead();
 
@@ -44,4 +44,5 @@ private:
     int m_retryCount = 0;
     static constexpr int MaxRetries = 4;
     QTimer m_retryTimer;
+    static constexpr qint64 MaxQueuedVideoBytes = 512 * 1024;
 };

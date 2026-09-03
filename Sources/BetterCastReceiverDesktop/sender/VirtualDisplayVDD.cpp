@@ -129,6 +129,11 @@ QString displayAdapterString(const QString& deviceName) {
     return QString();
 }
 
+bool looksManagedVdd(const QString& text) {
+    const QString lower = text.toLower();
+    return lower.contains("mttvdd") || lower.contains("virtual display driver");
+}
+
 // ChangeDisplaySettingsEx returns bare negative numbers; naming them turns an
 // unhelpful "code -1" log line into something diagnosable.
 QString dispChangeName(LONG code) {
@@ -227,10 +232,9 @@ VirtualDisplayVDD::VirtualDisplayVDD(QObject* parent)
 }
 
 VirtualDisplayVDD::~VirtualDisplayVDD() {
-    // Clean up any virtual displays we created
-    if (m_createdDisplayCount > 0) {
-        removeAllVirtualDisplays();
-    }
+    // Stop presenting VDD monitors as live desktop surfaces. Keep the driver
+    // and device nodes installed so the next launch can reuse them without UAC.
+    detachAllVirtualDisplays();
 }
 
 bool VirtualDisplayVDD::isVddInstalled() const {
@@ -1544,6 +1548,49 @@ bool VirtualDisplayVDD::createVirtualDisplay(int width, int height, int refreshR
     return true;
 }
 
+bool VirtualDisplayVDD::detachAllVirtualDisplays() {
+#ifdef _WIN32
+    bool ok = true;
+    int detached = 0;
+    for (const auto& mon : enumerateMonitors()) {
+        if (!mon.isManagedVdd || !mon.attached || mon.name.isEmpty()) continue;
+
+        DEVMODEW dm = {};
+        dm.dmSize = sizeof(dm);
+        dm.dmPosition.x = 0;
+        dm.dmPosition.y = 0;
+        dm.dmPelsWidth = 0;
+        dm.dmPelsHeight = 0;
+        dm.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        const std::wstring name = mon.name.toStdWString();
+        const LONG ret = ChangeDisplaySettingsExW(
+            name.c_str(), &dm, nullptr, CDS_UPDATEREGISTRY | CDS_NORESET, nullptr);
+        if (ret == DISP_CHANGE_SUCCESSFUL) {
+            detached++;
+        } else {
+            ok = false;
+            VDD_LOG(QString("VDD: Could not detach %1 — %2")
+                        .arg(mon.name, dispChangeName(ret)));
+        }
+    }
+
+    if (detached > 0) {
+        const LONG apply = ChangeDisplaySettingsExW(nullptr, nullptr, nullptr, 0, nullptr);
+        if (apply != DISP_CHANGE_SUCCESSFUL) {
+            ok = false;
+            VDD_LOG("VDD: Could not apply detached display topology — " +
+                    dispChangeName(apply));
+        } else {
+            VDD_LOG(QString("VDD: Detached %1 virtual display(s); device nodes retained")
+                        .arg(detached));
+        }
+    }
+    return ok;
+#else
+    return false;
+#endif
+}
+
 bool VirtualDisplayVDD::removeVirtualDisplay(int index) {
     if (!m_vddInstalled) return false;
 
@@ -1666,6 +1713,7 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
                 // DXGI adapter description, which names the rendering GPU.
                 const QString devStrings = displayAdapterString(info.name);
                 info.isVirtual = looksVirtual(adapterName) || looksVirtual(devStrings);
+                info.isManagedVdd = looksManagedVdd(adapterName) || looksManagedVdd(devStrings);
                 if (info.isVirtual && !looksVirtual(adapterName)) {
                     // Show the useful name in the picker, not the host GPU.
                     info.adapterName = "Virtual Display Driver";
@@ -1722,6 +1770,7 @@ QVector<VirtualDisplayVDD::MonitorInfo> VirtualDisplayVDD::enumerateMonitors() c
             info.name = devName;
             info.adapterName = devString;
             info.isVirtual = true;
+            info.isManagedVdd = looksManagedVdd(devString);
 
             // Get resolution from display settings
             DEVMODEW dm = {};
@@ -2006,12 +2055,26 @@ bool VirtualDisplayVDD::removeVddDevices(int keep) {
         return true;
     }
 
-    // One command removing every stale node, so the user sees a single UAC
-    // prompt instead of one per display.
-    QStringList parts;
+    QStringList ids;
     for (int i = keep; i < devices.size(); i++) {
-        parts << QString("pnputil /remove-device \"%1\"").arg(devices[i].instanceId);
-        VDD_LOG("VDD: Will remove " + devices[i].instanceId + " (" + devices[i].friendlyName + ")");
+        ids << devices[i].instanceId;
+    }
+    return removeVddDeviceIds(ids);
+#else
+    Q_UNUSED(keep);
+    return false;
+#endif
+}
+
+bool VirtualDisplayVDD::removeVddDeviceIds(const QStringList& instanceIds) {
+#ifdef _WIN32
+    if (instanceIds.isEmpty()) return true;
+
+    // One command removes only the requested nodes behind one UAC prompt.
+    QStringList parts;
+    for (const QString& id : instanceIds) {
+        parts << QString("pnputil /remove-device \"%1\"").arg(id);
+        VDD_LOG("VDD: Will remove " + id);
     }
     const QString args = "/c " + parts.join(" & ");
 
@@ -2047,14 +2110,20 @@ bool VirtualDisplayVDD::removeVddDevices(int keep) {
         VDD_LOG(QString("VDD: Removal helper exit code %1").arg(exitCode));
     }
 
-    const int remaining = enumerateVddDevices().size();
+    const auto remainingDevices = enumerateVddDevices();
+    const int remaining = remainingDevices.size();
     VDD_LOG(QString("VDD: %1 virtual display device node(s) remain").arg(remaining));
     m_createdDisplayCount = remaining;
     emit virtualDisplayRemoved();
     emit statusChanged(QString("%1 virtual display(s) remaining").arg(remaining));
-    return remaining <= keep;
+    QSet<QString> remainingIds;
+    for (const auto& device : remainingDevices) remainingIds.insert(device.instanceId.toUpper());
+    for (const QString& removed : instanceIds) {
+        if (remainingIds.contains(removed.toUpper())) return false;
+    }
+    return true;
 #else
-    Q_UNUSED(keep);
+    Q_UNUSED(instanceIds);
     return false;
 #endif
 }

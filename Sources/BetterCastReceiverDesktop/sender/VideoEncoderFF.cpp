@@ -177,7 +177,7 @@ bool VideoEncoderFF::init(int width, int height, int fps, int bitrateMbps) {
     m_pkt = av_packet_alloc();
     m_frameCount = 0;
     m_firstPtsNanos = -1;
-    m_forceKeyframe = false;
+    m_forceKeyframe.store(false, std::memory_order_relaxed);
     return true;
 }
 
@@ -268,10 +268,9 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, q
     // One tick per transmitted frame, matching ctx->time_base of {1, fps}.
     m_frame->pts = m_frameCount++;
 
-    if (m_forceKeyframe) {
+    if (m_forceKeyframe.exchange(false, std::memory_order_relaxed)) {
         m_frame->pict_type = AV_PICTURE_TYPE_I;
         m_frame->flags |= AV_FRAME_FLAG_KEY;
-        m_forceKeyframe = false;
     } else {
         m_frame->pict_type = AV_PICTURE_TYPE_NONE;
         m_frame->flags &= ~AV_FRAME_FLAG_KEY;
@@ -330,13 +329,13 @@ void VideoEncoderFF::encode(const QByteArray& nv12Data, int width, int height, q
         QByteArray avccData = annexBtoAVCC(m_pkt->data, m_pkt->size);
         payload.append(avccData);
 
-        emit encoded(payload);
+        emit encoded(payload, isKeyframe);
         av_packet_unref(m_pkt);
     }
 }
 
 void VideoEncoderFF::requestKeyframe() {
-    m_forceKeyframe = true;
+    m_forceKeyframe.store(true, std::memory_order_relaxed);
 }
 
 void VideoEncoderFF::shutdown() {

@@ -3,6 +3,9 @@
 #include <QObject>
 #include <QString>
 #include <QVector>
+#include <QMutex>
+#include <QPointer>
+#include <memory>
 #include <cstdint>
 
 class ScreenCapture;
@@ -69,6 +72,16 @@ signals:
     void sessionsChanged();
 
 private:
+    struct DeliveryState {
+        QMutex mutex;
+        QByteArray pendingPayload;
+        bool pendingKeyframe = false;
+        bool networkDrainScheduled = false;
+        bool needKeyframe = false;
+        QPointer<NetworkSender> network;
+        QPointer<VideoEncoderFF> encoder;
+    };
+
     // One receiver's pipeline. Owned by the controller; torn down as a unit.
     struct Session {
         QString host;
@@ -86,6 +99,7 @@ private:
         VideoEncoderFF* encoder = nullptr;
         NetworkSender* network = nullptr;
         InputInjector* input = nullptr;
+        std::shared_ptr<DeliveryState> delivery;
     };
 
     Session* findSession(const QString& host) const;
@@ -105,7 +119,7 @@ private:
 
     void onFrameCaptured(Session* s, const QByteArray& nv12, int width, int height,
                          qint64 ptsNanos);
-    void onEncoded(Session* s, const QByteArray& payload);
+    void drainEncoded(const std::shared_ptr<DeliveryState>& delivery);
     void onSessionConnected(Session* s);
     void onSessionDisconnected(Session* s);
 
@@ -117,11 +131,10 @@ private:
     bool m_displaysPrepared = false;
     int  m_desiredPoolSize = 0;   // set from kDisplayPoolSize, grows on demand
 
-    // How many virtual displays to have ready before the first stream starts.
-    // Growing the pool later restarts the driver and kills any live capture, so
-    // it is built once, up front, big enough for the usual phone + tablet +
-    // laptop case.
-    static constexpr int kDisplayPoolSize = 3;
+    // Prepare only the display actually needed by the first stream. Pre-creating
+    // three nodes made Windows expose two unused monitors at the driver's
+    // fallback 800x600 mode.
+    static constexpr int kDisplayPoolSize = 1;
     VirtualDisplayVDD* m_vdd = nullptr;
 
     // Defaults applied to the next session started without explicit values.

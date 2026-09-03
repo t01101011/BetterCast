@@ -4,6 +4,7 @@
 #include "NetworkSender.h"
 #include "../LogManager.h"
 #include <QDebug>
+#include <QMutexLocker>
 
 #ifdef _WIN32
 #include "ScreenCaptureWin.h"
@@ -313,6 +314,9 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
 
     s->encoder = new VideoEncoderFF(this);
     s->network = new NetworkSender(this);
+    s->delivery = std::make_shared<DeliveryState>();
+    s->delivery->network = s->network;
+    s->delivery->encoder = s->encoder;
 
     // Input travels back over the same socket. Point the injector at this
     // session's display so events land there, not on the primary.
@@ -328,10 +332,45 @@ bool SenderController::startSending(const QString& receiverHost, uint16_t port,
             }, Qt::DirectConnection);
     connect(s->capture, &ScreenCapture::error, this, &SenderController::error);
 
-    // Encode → network is QUEUED: QTcpSocket is thread-affine to the GUI thread.
+    // Encode happens on the capture thread while QTcpSocket belongs to the GUI
+    // thread. Retain only the newest usable payload and post at most one drain;
+    // a normal queued QByteArray signal grows an unbounded stale-frame FIFO.
+    const auto delivery = s->delivery;
     connect(s->encoder, &VideoEncoderFF::encoded, this,
-            [this, s](const QByteArray& payload) { onEncoded(s, payload); },
-            Qt::QueuedConnection);
+            [this, delivery, encoder = s->encoder](const QByteArray& payload, bool keyframe) {
+                bool schedule = false;
+                bool requestKeyframe = false;
+                {
+                    QMutexLocker lock(&delivery->mutex);
+                    if (delivery->needKeyframe && !keyframe) {
+                        requestKeyframe = true;
+                    } else {
+                        if (delivery->pendingKeyframe && !keyframe) {
+                            // Preserve the queued IDR until the GUI drain sends it.
+                        } else if (!delivery->pendingPayload.isEmpty() && !keyframe) {
+                            delivery->needKeyframe = true;
+                            delivery->pendingPayload.clear();
+                            delivery->pendingKeyframe = false;
+                            requestKeyframe = true;
+                        }
+                        if ((!delivery->needKeyframe || keyframe) &&
+                            !(delivery->pendingKeyframe && !keyframe)) {
+                            delivery->pendingPayload = payload;
+                            delivery->pendingKeyframe = keyframe;
+                            if (!delivery->networkDrainScheduled) {
+                                delivery->networkDrainScheduled = true;
+                                schedule = true;
+                            }
+                        }
+                    }
+                }
+                if (requestKeyframe) encoder->requestKeyframe();
+                if (schedule) {
+                    QMetaObject::invokeMethod(this, [this, delivery]() {
+                        drainEncoded(delivery);
+                    }, Qt::QueuedConnection);
+                }
+            }, Qt::DirectConnection);
     connect(s->encoder, &VideoEncoderFF::error, this, &SenderController::error);
 
     connect(s->network, &NetworkSender::connected, this, [this, s]() { onSessionConnected(s); });
@@ -465,10 +504,31 @@ void SenderController::onFrameCaptured(Session* s, const QByteArray& nv12,
     s->encoder->encode(nv12, width, height, ptsNanos);
 }
 
-void SenderController::onEncoded(Session* s, const QByteArray& payload) {
-    if (s && s->network && s->network->isConnected()) {
-        s->network->sendVideo(payload);
+void SenderController::drainEncoded(const std::shared_ptr<DeliveryState>& delivery) {
+    QByteArray payload;
+    bool keyframe = false;
+    {
+        QMutexLocker lock(&delivery->mutex);
+        payload = std::move(delivery->pendingPayload);
+        keyframe = delivery->pendingKeyframe;
+        delivery->pendingKeyframe = false;
+        delivery->networkDrainScheduled = false;
     }
+
+    if (payload.isEmpty()) return;
+    const bool sent = delivery->network && delivery->network->sendVideo(payload);
+    bool requestKeyframe = false;
+    {
+        QMutexLocker lock(&delivery->mutex);
+        if (!sent) {
+            delivery->needKeyframe = true;
+            delivery->pendingPayload.clear();
+            requestKeyframe = true;
+        } else if (keyframe) {
+            delivery->needKeyframe = false;
+        }
+    }
+    if (requestKeyframe && delivery->encoder) delivery->encoder->requestKeyframe();
 }
 
 QString SenderController::encoderInfo() const {

@@ -23,6 +23,7 @@ public:
         int width;
         int height;
         bool isVirtual;      // true if this is a VDD virtual display
+        bool isManagedVdd = false; // specifically BetterCast/MttVDD
         // Attached to the desktop, i.e. it has a framebuffer to capture.
         //
         // Do NOT infer this from width/height: EnumDisplaySettings with
@@ -121,6 +122,10 @@ public:
     bool attachVirtualDisplay(const QString& deviceName,
                               int width = 0, int height = 0, int refreshRate = 60);
 
+    // Detach virtual monitors from the Windows desktop without uninstalling the
+    // driver or deleting reusable device nodes. This needs no elevation.
+    bool detachAllVirtualDisplays();
+
     // Resolution virtual displays should run at. Windows brings an extended VDD
     // monitor up at the driver default of 800x600, so without this the stream
     // goes out at 800x600 regardless of what was requested.
@@ -195,6 +200,7 @@ private:
     QVector<VddResolution> readVddSettings() const;
     bool notifyDriverRefresh();
     bool tryNamedPipe(const QString& command);
+    bool removeVddDeviceIds(const QStringList& instanceIds);
 
     QString m_vddPath;
     bool m_vddInstalled = false;

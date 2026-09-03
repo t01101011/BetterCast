@@ -12,6 +12,8 @@ NetworkSender::NetworkSender(QObject* parent)
 
     connect(m_socket, &QTcpSocket::connected, this, [this]() {
         m_retryCount = 0;
+        m_socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+        m_socket->setSocketOption(QAbstractSocket::KeepAliveOption, 1);
         LogManager::instance().log("Sender: TCP connected to receiver");
         emit connected();
     });
@@ -108,23 +110,35 @@ bool NetworkSender::isConnected() const {
     return m_socket->state() == QAbstractSocket::ConnectedState;
 }
 
-void NetworkSender::sendPacket(uint8_t type, const QByteArray& payload) {
-    if (!isConnected()) return;
+bool NetworkSender::sendPacket(uint8_t type, const QByteArray& payload) {
+    if (!isConnected()) return false;
+
+    const qint64 packetBytes = 5 + static_cast<qint64>(payload.size());
+    const qint64 queued = m_socket->bytesToWrite();
+    // The budget bounds accumulated stale data, not the encoded frame size.
+    // Permit one oversized IDR on an empty socket; rejecting it forever would
+    // trap recovery in a request-keyframe/reject-keyframe loop.
+    if (type == 0x01 && queued > 0 && queued + packetBytes > MaxQueuedVideoBytes) {
+        return false;
+    }
 
     // BetterCast TCP framing: [4B BE length][1B type][payload]
     // length = 1 (type byte) + payload size
     uint32_t totalLen = 1 + static_cast<uint32_t>(payload.size());
     uint32_t lenBE = qToBigEndian(totalLen);
 
-    m_socket->write(reinterpret_cast<const char*>(&lenBE), 4);
-    m_socket->write(reinterpret_cast<const char*>(&type), 1);
-    m_socket->write(payload);
+    QByteArray packet;
+    packet.reserve(static_cast<int>(packetBytes));
+    packet.append(reinterpret_cast<const char*>(&lenBE), 4);
+    packet.append(reinterpret_cast<const char*>(&type), 1);
+    packet.append(payload);
+    return m_socket->write(packet) == packet.size();
 }
 
-void NetworkSender::sendVideo(const QByteArray& payload) {
-    sendPacket(0x01, payload);
+bool NetworkSender::sendVideo(const QByteArray& payload) {
+    return sendPacket(0x01, payload);
 }
 
 void NetworkSender::sendAudio(const QByteArray& payload) {
-    sendPacket(0x02, payload);
+    (void)sendPacket(0x02, payload);
 }

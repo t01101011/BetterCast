@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QByteArray>
 #include <QSize>
+#include <atomic>
 #include <cstdint>
 
 struct AVCodecContext;
@@ -32,7 +33,7 @@ public:
 
 signals:
     // data: BetterCast video payload = [8B PTS nanoseconds][AVCC NALUs]
-    void encoded(const QByteArray& data);
+    void encoded(const QByteArray& data, bool keyframe);
     void error(const QString& message);
 
 private:
@@ -45,7 +46,7 @@ private:
     int64_t m_frameCount = 0;
     int m_fps = 30;
     qint64 m_firstPtsNanos = -1;   // wall-clock origin, so PTS starts near zero
-    bool m_forceKeyframe = false;
+    std::atomic<bool> m_forceKeyframe{false};
     QString m_encoderName;
 
     // Cached SPS/PPS for prepending to keyframes
